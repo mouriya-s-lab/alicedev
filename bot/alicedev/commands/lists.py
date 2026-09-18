@@ -122,7 +122,7 @@ async def handle_requirements_list(context: CommandContext) -> None:
             "title": "需求列表",
             "subtitle": f"共 {page.total} 条需求",
             "rows": rows,
-            "footer": f"第 {page.page}/{page.pages} 页 · /收藏夹 {page.page}",
+            "footer": f"第 {page.page}/{page.pages} 页 · /需求列表 {page.page}",
         },
     )
 

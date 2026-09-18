@@ -1,0 +1,4 @@
+[32m[05:02:08.484][0m [Core] [1m[INFO][0m [api.server:96]: [1minternal API listening on 0.0.0.0:6200 (generation=1)[0m
+[32m[05:02:08.485][0m [Core] [1m[INFO][0m [alicedev.main:182]: [1malicedev initialized: 4 commands, 1 templates[0m
+  AstrBot v4.28.1 WebUI is ready
+[32m[05:02:09.506][0m [Core] [1m[INFO][0m [core.core_lifecycle:364]: [1mAstrBot started.[0m
