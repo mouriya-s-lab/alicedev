@@ -2,8 +2,9 @@ Command (run from /Users/mouriya/Ext/code/alicedev-wt/links-github):
 PYTHONPATH=bot uv run --with aiohttp --python 3.11 python /tmp/alicedev-github-smoke.py
 
 Observed output:
+#12 TraderAlice OpenAlice 12
 issue github_issue 1539 True https://github.com/TraderAlice/OpenAlice/issues/1539
 pr github_pr 1538 True https://github.com/TraderAlice/OpenAlice/pull/1538
 shorthand github_issue 1539
 
-The throwaway script asserted parsing of #1539, full issue and pull URLs, a non-GitHub URL, and plain text, then fetched the real public repository issue #1539 and pull request #1538 unauthenticated. The script was removed after the run.
+The throwaway script asserted parsing of the required `#12`, another default-repository shorthand, full issue and pull URLs, a non-GitHub URL, and plain text. It then fetched the real public repository issue #1539 and pull request #1538 unauthenticated; both returned typed fields and canonical URLs. The script was removed after the run.
