@@ -25,7 +25,15 @@ from astrbot.core.message.message_event_result import MessageChain  # noqa: E402
 
 from alicedev.api.reply import ReplyRenderer  # noqa: E402
 from alicedev.api.server import InternalApi  # noqa: E402
-from alicedev.commands import favorites, interpret, links, lists, requirement  # noqa: E402
+from alicedev.commands import (  # noqa: E402
+    archive,
+    favorites,
+    help,
+    interpret,
+    links,
+    lists,
+    requirement,
+)
 from alicedev.commands.context import Services  # noqa: E402
 from alicedev.commands.dispatch import CommandDispatcher  # noqa: E402
 from alicedev.commands.registry import CommandRegistry  # noqa: E402
@@ -41,19 +49,17 @@ from alicedev.templates.registry import TemplateRegistry  # noqa: E402
 
 _LOG = logging.getLogger("alicedev")
 
-
-def _optional_card_renderer(star: "AliceDevPlugin"):
+def _optional_card_renderer(star: "AliceDevPlugin", templates_root: Path):
     """Return a CardRenderer if CardsFavorites has landed it, else None."""
     try:
         from alicedev.render.cards import CardRenderer  # type: ignore
     except Exception:  # noqa: BLE001
         return None
     try:
-        return CardRenderer(star)  # signature owned by CardsFavorites
+        return CardRenderer(star, templates_root)  # signature owned by CardsFavorites
     except Exception:  # noqa: BLE001
         _LOG.warning("CardRenderer present but could not be constructed", exc_info=True)
         return None
-
 
 def _optional_gateway_client(config: PluginConfig):
     try:
@@ -108,11 +114,14 @@ class AliceDevPlugin(Star):
         self._services: Services | None = None
 
     async def initialize(self) -> None:
-        plugin_dir = Path(_PLUGIN_DIR)
-        config = PluginConfig.from_astrbot(self._raw_config, plugin_dir=plugin_dir)
+        from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+        data_dir = Path(get_astrbot_plugin_data_path()) / "alicedev"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        config = PluginConfig.from_astrbot(self._raw_config, data_dir=data_dir)
         self._config = config
 
-        store = Store(str(plugin_dir / "data" / "alicedev.duckdb"))
+        store = Store(str(config.duckdb_path))
         await store.open()
         self._store = store
 
@@ -131,7 +140,7 @@ class AliceDevPlugin(Star):
         )
         self._sessions_actor = actor
 
-        render = _optional_card_renderer(self)
+        render = _optional_card_renderer(self, config.templates_root)
         gateway = _optional_gateway_client(config)
         github = _optional_github_client(config)
         reports = ReportPublisher(store=store, config=config)
@@ -161,6 +170,8 @@ class AliceDevPlugin(Star):
         lists.register(registry, services)
         links.register(registry, services)
         interpret.register(registry, services)
+        archive.register(registry, services)
+        help.register(registry, services)
 
         self._dispatcher = CommandDispatcher(registry, services)
 

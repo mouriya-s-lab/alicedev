@@ -1,0 +1,35 @@
+# Local dev stack for the alicedev spike (OrbStack). AstrBot (WebChat) + t2i.
+# The paseo daemon runs NATIVELY on the host (port 6767); the bot reaches it via
+# host.docker.internal and the native reply-cli reaches the bot's internal API on
+# the published host port 6200.
+#
+# Secrets come from deploy/dev/.env.local (gitignored). Start with:
+#   docker compose --env-file deploy/dev/.env.local -f deploy/dev/docker-compose.yml up -d
+name: alicedev-dev
+
+services:
+  astrbot:
+    image: soulter/astrbot:v4.28.1
+    container_name: alicedev-astrbot
+    restart: unless-stopped
+    ports:
+      - "6185:6185"   # dashboard + WebChat
+      - "6200:6200"   # internal API (native paseo reply-cli -> host:6200)
+    environment:
+      TZ: Asia/Shanghai
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${ASTRBOT_DASHBOARD_INITIAL_PASSWORD:-alicedev-dev}
+    volumes:
+      - ./astrbot-data:/AstrBot/data
+      - ../../bot:/AstrBot/data/plugins/alicedev
+      - ../../templates:/AstrBot/alicedev-templates
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - t2i
+
+  t2i:
+    image: soulter/astrbot-t2i-service:latest
+    container_name: alicedev-t2i
+    restart: unless-stopped
+    expose:
+      - "8999"

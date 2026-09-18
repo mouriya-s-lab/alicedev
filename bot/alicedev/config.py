@@ -35,6 +35,7 @@ class PluginConfig:
     templates_root: Path
     images_root: Path
     stickers_root: Path
+    data_dir: Path = Path("/AstrBot/data/plugin_data/alicedev")
     allowed_chats: tuple[str, ...] = ()
     admin_users: tuple[str, ...] = ()
     github_token: str | None = None
@@ -56,13 +57,19 @@ class PluginConfig:
     def chat_allowed(self, chat_key: str) -> bool:
         return not self.allowed_chats or chat_key in self.allowed_chats
 
-    @classmethod
-    def from_astrbot(cls, config: Mapping[str, Any], *, plugin_dir: Path) -> "PluginConfig":
-        """Build from AstrBot's ``AstrBotConfig`` (dict-like) plus the plugin dir.
+    @property
+    def duckdb_path(self) -> Path:
+        return self.data_dir / "alicedev.duckdb"
 
-        Template/card/sticker/image roots default to directories bundled next to
-        the plugin so the plugin is self-contained at runtime; every value may be
-        overridden through the dashboard config.
+    @classmethod
+    def from_astrbot(cls, config: Mapping[str, Any], *, data_dir: Path) -> "PluginConfig":
+        """Build from AstrBot's ``AstrBotConfig`` (dict-like).
+
+        ``data_dir`` is the plugin's runtime data directory under AstrBot's data
+        root (``data/plugin_data/alicedev``); the DuckDB file and default image
+        root live there, never in the bind-mounted source tree. ``templates_root``
+        has no fallback — it comes from config (default ``/AstrBot/alicedev-templates``).
+        Every value is overridable through the dashboard config.
         """
 
         def get(key: str, default: Any = None) -> Any:
@@ -71,7 +78,7 @@ class PluginConfig:
             except AttributeError:
                 return config[key] if key in config else default  # type: ignore[index]
 
-        templates_root = Path(get("templates_root") or (plugin_dir / "templates"))
+        templates_root = Path(get("templates_root") or "/AstrBot/alicedev-templates")
         return cls(
             paseo_url=str(get("paseo_url", "http://paseo:6767")),
             paseo_password=str(get("paseo_password", "")),
@@ -80,11 +87,9 @@ class PluginConfig:
             public_base_url=str(get("public_base_url", "")),
             reports_root=Path(get("reports_root") or "/srv/alicedev/reports"),
             templates_root=templates_root,
-            images_root=Path(
-                get("images_root")
-                or (plugin_dir / "data" / "plugin_data" / "alicedev" / "images")
-            ),
+            images_root=Path(get("images_root") or (data_dir / "images")),
             stickers_root=Path(get("stickers_root") or (templates_root / "stickers")),
+            data_dir=data_dir,
             allowed_chats=_as_tuple(get("allowed_chats")),
             admin_users=_as_tuple(get("admin_users")),
             github_token=(str(get("github_token")) or None) if get("github_token") else None,

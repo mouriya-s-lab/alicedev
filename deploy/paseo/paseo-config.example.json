@@ -1,0 +1,15 @@
+{
+  "// note": "paseo daemon config (~/.paseo/config.json or $PASEO_HOME/config.json). Enables the base `omp` provider and declares the alicedev custom provider that loads the built omp extension. Run `paseo reload` after editing. PASEO_PASSWORD is set via env, NOT here.",
+  "agents": {
+    "providers": {
+      "omp": {
+        "enabled": true
+      },
+      "omp-alicedev": {
+        "extends": "omp",
+        "label": "OMP alicedev",
+        "command": ["omp", "-e", "/opt/alicedev/omp-extension"]
+      }
+    }
+  }
+}
