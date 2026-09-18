@@ -38,11 +38,29 @@ class Store:
         )
         schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
         await self._run(lambda c: c.execute(schema_sql))
+        await self._reconcile_sequences()
         rows = await self.fetch_all("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
         if not rows:
             await self.execute(
                 "INSERT INTO schema_version (version) VALUES (?)", (_SCHEMA_VERSION,)
             )
+
+    async def _reconcile_sequences(self) -> None:
+        """Reseed surrogate-key sequences past the current max id.
+
+        A DuckDB sequence can reset to its start value when the database is
+        reopened while table rows persist, so ``nextval`` would return an id that
+        already exists and violate the primary key. Recreate each sequence to
+        start just past ``max(id)`` so allocation is always collision-free.
+        """
+        for sequence, table in (
+            ("seq_requirements", "requirements"),
+            ("seq_favorites", "favorites"),
+        ):
+            row = await self.fetch_one(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
+            start = (int(row[0]) if row else 0) + 1
+            await self.execute(f"DROP SEQUENCE IF EXISTS {sequence}")
+            await self.execute(f"CREATE SEQUENCE {sequence} START {start}")
 
     async def close(self) -> None:
         if self._conn is not None:

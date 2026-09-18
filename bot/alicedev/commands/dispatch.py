@@ -12,6 +12,7 @@ import re
 from typing import TYPE_CHECKING
 
 from alicedev.commands.context import CommandContext, Mention, QuotedMessage
+from alicedev.paseo.session_actor import SessionActorError
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -95,6 +96,13 @@ class CommandDispatcher:
         self._registry = registry
         self._services = services
 
+    async def _safe_reply(self, ctx: CommandContext, text: str) -> None:
+        """Reply to the user; never let a failed reply mask the original error."""
+        try:
+            await ctx.reply_text(text)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("failed to send error reply")
+
     async def handle_message(self, event: "AstrMessageEvent") -> bool:
         """Single entrypoint for every message.
 
@@ -119,8 +127,12 @@ class CommandDispatcher:
                 return False
             try:
                 await spec.handler(ctx)
+            except SessionActorError as exc:
+                _LOG.exception("command handler failed: /%s", spec.name)
+                await self._safe_reply(ctx, f"处理失败：{exc}")
             except Exception:  # noqa: BLE001 - a bad handler must not crash the adapter
                 _LOG.exception("command handler failed: /%s", spec.name)
+                await self._safe_reply(ctx, "处理失败：内部错误，请稍后再试")
             event.stop_event()
             return True
         return await self.handle_bare_link(event)
@@ -173,6 +185,10 @@ class CommandDispatcher:
         template = self._services.templates.by_link(getattr(ref, "link_kind", ""))
         if template is None:
             return False
+        # Claimed: this is a GitHub link alicedev handles. From here alicedev owns
+        # every error (reports it and stops the event) so a failure never falls
+        # through to AstrBot's LLM.
+        ctx = build_context(event, self._services, text)
         try:
             import dataclasses
 
@@ -180,16 +196,18 @@ class CommandDispatcher:
 
             item = await github.fetch(ref)
             gh_vars = github.to_template_vars(item)
-            ctx = build_context(event, self._services, text)
             vars = dataclasses.replace(build_template_vars(ctx), github=gh_vars.github)
+            record = await self._services.sessions.create_and_inject(
+                chat_key=ctx.chat_key, template=template, vars=vars,
+                created_by=ctx.user_key, platform_message_id=event.message_obj.message_id,
+                sender_key=ctx.user_key,
+            )
+            await ctx.reply_text(f"已创建 {record.session_ref}")
+        except SessionActorError as exc:
+            _LOG.exception("bare-link session failed")
+            await self._safe_reply(ctx, f"处理失败：{exc}")
         except Exception:  # noqa: BLE001
-            _LOG.exception("github link fetch failed")
-            return False
-        ctx = build_context(event, self._services, text)
-        record = await self._services.sessions.create_and_inject(
-            chat_key=ctx.chat_key, template=template, vars=vars,
-            created_by=ctx.user_key, platform_message_id=event.message_obj.message_id,
-            sender_key=ctx.user_key,
-        )
-        await ctx.reply_text(f"已创建 {record.session_ref}")
+            _LOG.exception("bare-link handling failed")
+            await self._safe_reply(ctx, "处理失败：无法读取链接或创建会话，请稍后再试")
+        event.stop_event()
         return True

@@ -123,10 +123,13 @@ class SessionActor:
                 )
             except PaseoError as exc:
                 _LOG.warning("create failed for %s, trying find_by_label: %s", session_ref, exc)
-                handle = await self._paseo.find_by_label(session_ref)
+                try:
+                    handle = await self._paseo.find_by_label(session_ref)
+                except PaseoError:
+                    handle = None
                 if handle is None:
                     await self._sessions.set_status(session_ref, SessionStatus.FAILED)
-                    raise SessionActorError(f"paseo create failed: {exc}") from exc
+                    raise SessionActorError("创建会话失败：paseo 暂时不可达，请稍后再试") from exc
 
             await self._sessions.set_active(
                 session_ref, agent_id=handle.agent_id, workspace_id=handle.workspace_id,
@@ -153,7 +156,7 @@ class SessionActor:
     ) -> SessionRecord:
         record = await self._sessions.get(session_ref)
         if record is None:
-            raise SessionActorError(f"session unknown: {session_ref}")
+            raise SessionActorError(f"未找到会话 {session_ref}")
         await self._inject_locked(
             record, text, platform_message_id=platform_message_id, sender_key=sender_key
         )
@@ -168,7 +171,7 @@ class SessionActor:
         sender_key: str | None,
     ) -> None:
         if not record.agent_id:
-            raise SessionActorError(f"session {record.session_ref} has no agent")
+            raise SessionActorError(f"会话 {record.session_ref} 尚未就绪，请稍后再试")
         async with self._lock_for(record.session_ref):
             await self._wait_until_idle(record)
             msg_ref = new_msg_ref()

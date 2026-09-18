@@ -74,18 +74,21 @@ class MCPPaseoControl(PaseoControl):
             "Accept": "application/json, text/event-stream",
             "Authorization": f"Bearer {self._password}",
         }
-        async with self._session.post(self._endpoint, json=payload, headers=headers) as resp:
-            if resp.status == 401:
-                raise PaseoError("paseo MCP unauthorized (check PASEO_PASSWORD)")
-            body = await resp.text()
-            if resp.status >= 400:
-                raise PaseoError(f"paseo MCP HTTP {resp.status}: {body[:500]}")
-            ctype = resp.headers.get("Content-Type", "")
-            if "text/event-stream" in ctype:
-                return _parse_sse(body)
-            if not body.strip():
-                return None
-            return json.loads(body)
+        try:
+            async with self._session.post(self._endpoint, json=payload, headers=headers) as resp:
+                if resp.status == 401:
+                    raise PaseoError("paseo MCP unauthorized (check PASEO_PASSWORD)")
+                body = await resp.text()
+                if resp.status >= 400:
+                    raise PaseoError(f"paseo MCP HTTP {resp.status}: {body[:500]}")
+                ctype = resp.headers.get("Content-Type", "")
+                if "text/event-stream" in ctype:
+                    return _parse_sse(body)
+                if not body.strip():
+                    return None
+                return json.loads(body)
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise PaseoError(f"paseo MCP unreachable: {exc}") from exc
 
     async def _initialize(self) -> None:
         await self._post(
