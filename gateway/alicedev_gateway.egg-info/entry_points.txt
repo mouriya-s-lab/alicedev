@@ -1,2 +1,0 @@
-[console_scripts]
-alicedev-gateway = alicedev_gateway.__main__:main

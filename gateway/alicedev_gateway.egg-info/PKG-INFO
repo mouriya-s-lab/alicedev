@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: alicedev-gateway
-Version: 0.1.0
-Summary: Authenticated Paseo reverse proxy and published report gateway for alicedev
-Requires-Python: >=3.11
-Requires-Dist: aiohttp<4,>=3.10
-Requires-Dist: markdown-it-py<4,>=3.0
-Requires-Dist: mdit-py-plugins<1,>=0.4
-Requires-Dist: Pygments<3,>=2.17
