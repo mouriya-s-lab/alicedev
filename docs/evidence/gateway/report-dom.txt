@@ -1,0 +1,9 @@
+Gateway report browser evidence (agent-browser)
+=================================================
+
+A real browser opened the published Markdown report through the gateway. The report contained CJK text, a table, task list, footnote, Python/TypeScript fences, Mermaid, and a sibling PNG asset.
+
+Final DOM evaluation:
+  {"cjk": true, "highlightBlocks": 2, "imageLoaded": true, "mermaidSvg": 1}
+
+The report response also returned X-Robots-Tag: noindex and Referrer-Policy: no-referrer. Screenshot: report-rendered.png.

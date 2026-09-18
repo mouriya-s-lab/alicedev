@@ -14,7 +14,7 @@ python3 -m venv .venv
 ```
 
 ```sh
-docker build -t alicedev-gateway gateway
+docker build -f gateway/Dockerfile -t alicedev-gateway .
 docker run --rm --env-file deploy/dev/gateway.env \
   -p 8080:8080 alicedev-gateway
 ```

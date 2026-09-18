@@ -5,9 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app/gateway
 
-COPY pyproject.toml README.md ./
-COPY alicedev_gateway ./alicedev_gateway
-COPY static ./static
+COPY gateway/pyproject.toml gateway/README.md ./
+COPY gateway/alicedev_gateway ./alicedev_gateway
+COPY gateway/static ./static
 
 RUN pip install --no-cache-dir . \
     && useradd --create-home --uid 10001 gateway

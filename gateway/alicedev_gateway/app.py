@@ -10,8 +10,7 @@ import logging
 from pathlib import Path
 import time
 from typing import Mapping
-from urllib.parse import quote
-
+from urllib.parse import quote, urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .config import GatewayConfig
@@ -128,10 +127,9 @@ async def cookie_gate_middleware(
         raise web.HTTPForbidden(text="需要有效的 alicedev 分享授权。\n")
     return await handler(request)
 
-
 async def start_runtime(app: web.Application) -> None:
     config: GatewayConfig = app["gateway_config"]
-    session = ClientSession(timeout=ClientTimeout(total=30))
+    session = ClientSession(timeout=ClientTimeout(total=30), auto_decompress=False)
     app["http_session"] = session
     app["paseo_proxy"] = PaseoProxy(config=config, session=session)
     app["token_sweeper"] = asyncio.create_task(_sweep_tokens(app["token_table"]))
@@ -181,7 +179,7 @@ async def issue_token(request: web.Request) -> web.Response:
     except ValueError as exc:
         raise web.HTTPBadRequest(text=f"{exc}\n") from exc
 
-    url = f"https://{config.public_host}/t/{issued.token}"
+    url = f"{_public_scheme(config)}://{config.public_host}/t/{issued.token}"
     return web.json_response({"token": issued.token, "url": url})
 
 
@@ -287,7 +285,10 @@ async def _fetch_bot_status(session: ClientSession, config: GatewayConfig) -> Bo
     try:
         async with session.get(
             f"{config.bot_upstream}/v1/status",
-            headers={"X-Alicedev-Token": config.internal_token},
+            headers={
+                "X-Alicedev-Token": config.internal_token,
+                "Accept-Encoding": "identity",
+            },
             timeout=ClientTimeout(total=5),
         ) as response:
             if response.status != 200:
@@ -417,6 +418,9 @@ def _render_status(status: BotStatus, target: str | None) -> str:
 """
 
 
+def _public_scheme(config: GatewayConfig) -> str:
+    hostname = urlsplit(f"//{config.public_host}").hostname
+    return "http" if hostname in {"localhost", "127.0.0.1", "::1"} else "https"
 def _render_items(items: object) -> str:
     values = list(items)  # type: ignore[arg-type]
     if not values:
