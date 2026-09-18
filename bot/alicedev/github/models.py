@@ -86,17 +86,3 @@ class GithubItem:
     def repository(self) -> str:
         return f"{self.owner}/{self.repo}"
 
-    def as_template_vars(self) -> dict[str, object]:
-        """Return the architecture-defined ``github`` Jinja context."""
-
-        return {
-            "kind": self.kind.value,
-            "owner": self.owner,
-            "repo": self.repo,
-            "number": self.number,
-            "title": self.title,
-            "body": self.body,
-            "labels": list(self.labels),
-            "state": self.state,
-            "url": self.url,
-        }
