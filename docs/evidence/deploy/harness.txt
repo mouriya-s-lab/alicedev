@@ -1,0 +1,18 @@
+# Harness build target evidence
+
+Using the current BridgeCore harness source and its installed dependencies:
+
+```text
+node harness/build.mjs
+
+  harness/dist/omp-extension/index.js  14.3kb
+
+⚡ Done in 159ms
+omp-extension=   14653 bytes
+reply-cli=    4498 bytes
+```
+
+The smoke invoked the repository Makefile target (`make harness`), then asserted the
+extension output was non-empty and `harness/dist/reply-cli/alicedev-reply` executable.
+The temporary harness checkout was removed after the run; no generated artifacts are
+committed by this slice.
