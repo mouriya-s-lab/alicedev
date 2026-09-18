@@ -1,0 +1,15 @@
+Reserved gateway path regression evidence
+==========================================
+
+Environment: gateway on http://localhost:8080, no Paseo request needed.
+
+Command:
+  python3 -m compileall -q gateway/alicedev_gateway
+  curl -sS -o /tmp/gateway-reserved-path.body -w '%{http_code}' http://localhost:8080/_alicedev/r/r_abcdefghijklmnopqrstuvwxyz/
+
+Observed:
+  compileall_exit=0
+  reserved_report_trailing_slash_status=404
+  body=网关路径不存在。
+
+The trailing-slash report path is handled by the gateway and cannot fall through to Paseo.

@@ -275,6 +275,8 @@ async def static_asset(request: web.Request) -> web.StreamResponse:
 
 
 async def proxy(request: web.Request) -> web.StreamResponse:
+    if request.path.startswith("/_alicedev/"):
+        raise web.HTTPNotFound(text="网关路径不存在。\n")
     paseo: PaseoProxy = request.app["paseo_proxy"]
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return await paseo.websocket(request)
