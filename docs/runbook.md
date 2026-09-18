@@ -4,6 +4,8 @@
 dashboard 绑定到 `127.0.0.1:6185`；公网入口只有 Caddy 的 80/443，Caddy
 再转发到内部 gateway。不要把 paseo、gateway、AstrBot 内部 API 或 t2i 端口
 发布到主机。
+Compose 还会启动一个短命的 `reports-init` helper，只负责在共享卷中创建
+`_published` 子目录，确保 gateway 的只读 subpath mount 在首次启动时存在。
 
 ## 1. 事实与边界
 
@@ -184,7 +186,8 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 
 先暂停写入（至少停 AstrBot，报告生成期间也停 paseo agent），再备份：
 
-- DuckDB：插件 bind mount 下的 `bot/data/alicedev.duckdb`。
+- DuckDB：AstrBot 持久化卷中的 `/AstrBot/data/plugin_data/alicedev/alicedev.duckdb`
+  （宿主机不应假设插件源码 bind mount 下有数据库）。
 - `alicedev_astrbot_data`：AstrBot 平台和 dashboard 配置。
 - `alicedev_paseo_home`：paseo 状态、`config.json`、omp 凭据（这是秘密备份）。
 - `alicedev_workspace` 与 `alicedev_reports`：agent 工作区、源报告和 `_published`。
@@ -195,7 +198,7 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 ```bash
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml stop astrbot paseo'
 ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_paseo_home:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/paseo_home-$(date +%Y%m%d%H%M%S).tgz -C /src .'
-ssh nekoringo2 'tar czf /srv/alicedev/backups/duckdb-$(date +%Y%m%d%H%M%S).tgz -C /srv/alicedev bot/data/alicedev.duckdb'
+ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_astrbot_data:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 sh -c '\''tar czf /dst/duckdb-$(date +%Y%m%d%H%M%S).tgz -C /src plugin_data/alicedev/alicedev.duckdb'\''
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml start paseo astrbot'
 ```
 

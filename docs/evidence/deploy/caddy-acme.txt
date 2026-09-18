@@ -1,0 +1,47 @@
+# Caddy HTTP-01/TLS smoke evidence
+
+The temporary service was isolated from the production Compose project and used only
+`respond 200`; no AstrBot, gateway, paseo, or t2i service was started.
+
+Start command on `nekoringo2` used the pinned amd64 image and host ports 80/443. The
+container started as:
+
+```text
+022d4c029087dfc65aa5d48d607c254cebf720432938dd8baa47b58e35497396
+alicedev-caddy-acme Up Less than a second
+```
+
+External client command:
+
+```text
+curl -vI --max-time 30 https://alicedev.237575.xyz/
+```
+
+Observed TLS and HTTP result:
+
+```text
+* Connected to alicedev.237575.xyz (160.191.41.242) port 443
+* SSL connection using TLSv1.3 / AEAD-CHACHA20-POLY1305-SHA256
+* Server certificate:
+*  subject: CN=alicedev.237575.xyz
+*  issuer: C=US; O=Let's Encrypt; CN=YE1
+*  SSL certificate verify ok.
+< HTTP/2 200
+< server: Caddy
+< content-length: 19
+```
+
+Caddy log lines showed the real external HTTP-01 path and certificate issuance:
+
+```text
+"challenge_type":"http-01","ca":"https://acme-v02.api.letsencrypt.org/directory"
+"served key authentication","identifier":"alicedev.237575.xyz","challenge":"http-01"
+"authorization finalized","identifier":"alicedev.237575.xyz","authz_status":"valid"
+"validations succeeded; finalizing order"
+"certificate obtained successfully","identifier":"alicedev.237575.xyz","issuer":"acme-v02.api.letsencrypt.org-directory"
+```
+
+Teardown command removed the temporary container and its temporary `/srv/alicedev/acme-smoke`
+data directory; the final remote check exited 0 with no container remaining. This proves
+public DNS, TCP 80/443 reachability, ACME HTTP-01, certificate validation, and placeholder
+response without claiming the rest of the application stack was deployed.
