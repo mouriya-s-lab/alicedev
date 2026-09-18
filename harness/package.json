@@ -1,0 +1,13 @@
+{
+  "name": "@alicedev/harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.1.17",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.9.0"
+  }
+}

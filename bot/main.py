@@ -27,6 +27,7 @@ from alicedev.api.reply import ReplyRenderer  # noqa: E402
 from alicedev.api.server import InternalApi  # noqa: E402
 from alicedev.commands import (  # noqa: E402
     archive,
+    continuation,
     favorites,
     help,
     interpret,
@@ -166,6 +167,7 @@ class AliceDevPlugin(Star):
 
         # Built-in command registration (each slice's register()).
         requirement.register(registry, services)
+        continuation.register(registry, services)
         favorites.register(registry, services)
         lists.register(registry, services)
         links.register(registry, services)
