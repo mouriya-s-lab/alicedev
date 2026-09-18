@@ -1,0 +1,112 @@
+{
+  "allowed_chats": {
+    "type": "list",
+    "description": "允许使用的会话白名单（chat_key / unified_msg_origin）。留空表示全部允许。",
+    "items": {"type": "string"},
+    "default": []
+  },
+  "admin_users": {
+    "type": "list",
+    "description": "管理员 user_key 列表（<platform_id>:<sender_id>）。",
+    "items": {"type": "string"},
+    "default": []
+  },
+  "paseo_url": {
+    "type": "string",
+    "description": "paseo daemon 基址（docker 网络内），如 http://paseo:6767",
+    "default": "http://paseo:6767"
+  },
+  "paseo_password": {
+    "type": "string",
+    "description": "PASEO_PASSWORD（MCP/WS 鉴权）。",
+    "secret": true,
+    "default": ""
+  },
+  "paseo_provider": {
+    "type": "string",
+    "description": "paseo provider id（custom provider）。",
+    "default": "omp-alicedev"
+  },
+  "paseo_model": {
+    "type": "string",
+    "description": "模型 id（留空则用 omp 默认）。",
+    "default": ""
+  },
+  "paseo_thinking": {
+    "type": "string",
+    "description": "thinkingOptionId（off|minimal|low|medium|high|xhigh|max）。",
+    "default": "high"
+  },
+  "paseo_cwd": {
+    "type": "string",
+    "description": "paseo 会话工作目录。",
+    "default": "/workspace/alicedev"
+  },
+  "internal_token": {
+    "type": "string",
+    "description": "内部 API 共享密钥（X-Alicedev-Token）。",
+    "secret": true,
+    "default": ""
+  },
+  "internal_api_host": {
+    "type": "string",
+    "description": "内部 API 监听地址。",
+    "default": "0.0.0.0"
+  },
+  "internal_api_port": {
+    "type": "int",
+    "description": "内部 API 端口。",
+    "default": 6200
+  },
+  "gateway_url": {
+    "type": "string",
+    "description": "网关基址（签发分享 token）。",
+    "default": "http://gateway:8080"
+  },
+  "public_base_url": {
+    "type": "string",
+    "description": "对外公开基址（报告链接），如 https://alicedev.237575.xyz",
+    "default": ""
+  },
+  "reports_root": {
+    "type": "string",
+    "description": "报告共享卷根目录。",
+    "default": "/srv/alicedev/reports"
+  },
+  "templates_root": {
+    "type": "string",
+    "description": "模板根目录（含 prompts/cards/stickers）。留空则用插件内置 templates/。",
+    "default": ""
+  },
+  "stickers_root": {
+    "type": "string",
+    "description": "表情包目录。留空则用 templates/stickers。",
+    "default": ""
+  },
+  "images_root": {
+    "type": "string",
+    "description": "收藏图片落盘目录。",
+    "default": ""
+  },
+  "github_token": {
+    "type": "string",
+    "description": "GitHub token（可选，用于链接预取）。",
+    "secret": true,
+    "default": ""
+  },
+  "default_repo": {
+    "type": "string",
+    "description": "GitHub 默认仓库（#n 解析）。",
+    "default": "TraderAlice/OpenAlice"
+  },
+  "idle_close_seconds": {
+    "type": "int",
+    "description": "会话空闲关闭阈值（秒）。默认 12 小时。",
+    "default": 43200
+  },
+  "sweeper_interval_seconds": {
+    "type": "int",
+    "description": "sweeper 扫描周期（秒）。",
+    "default": 600
+  }
+}
