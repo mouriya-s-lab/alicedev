@@ -1,0 +1,162 @@
+services:
+  # Build-only service. `make build` builds this first, then the child image below.
+  paseo-base:
+    image: alicedev/paseo-arch:local
+    profiles: [build]
+    build:
+      context: ${PASEO_REPO_CONTEXT:-../../paseo-alicedev}
+      dockerfile: docker/arch/Dockerfile
+      args:
+        PASEO_VERSION: ${PASEO_VERSION:-0.8.0}
+        EXPO_PUBLIC_PASEO_SELFHOSTED: "true"
+        EXPO_PUBLIC_LOCAL_DAEMON: self-hosted
+
+  caddy:
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+    container_name: alicedev-caddy
+    restart: unless-stopped
+    environment:
+      ALICEDEV_HOST: ${ALICEDEV_HOST:?set ALICEDEV_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge, internal]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  gateway:
+    image: alicedev/gateway:local
+    container_name: alicedev-gateway
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: gateway/Dockerfile
+    environment:
+      GATEWAY_SECRET: ${GATEWAY_SECRET:?set GATEWAY_SECRET}
+      ALICEDEV_INTERNAL_TOKEN: ${ALICEDEV_INTERNAL_TOKEN:?set ALICEDEV_INTERNAL_TOKEN}
+      PASEO_PASSWORD: ${PASEO_PASSWORD:?set PASEO_PASSWORD}
+      PASEO_UPSTREAM: http://paseo:6767
+      BOT_UPSTREAM: http://astrbot:6200
+      PUBLIC_HOST: ${ALICEDEV_HOST:?set ALICEDEV_HOST}
+      REPORTS_PUBLISHED_ROOT: /srv/alicedev/reports/_published
+    expose: ["8080"]
+    volumes:
+      - type: volume
+        source: reports
+        target: /srv/alicedev/reports/_published
+        read_only: true
+        volume:
+          subpath: _published
+    networks: [internal]
+    depends_on:
+      paseo:
+        condition: service_healthy
+      astrbot:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/_alicedev/health', timeout=3); d=json.load(r); raise SystemExit(0 if r.status == 200 and d.get('ok') is True else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  astrbot:
+    image: soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf
+    container_name: alicedev-astrbot
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: Asia/Shanghai
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${ASTRBOT_DASHBOARD_INITIAL_PASSWORD:?set ASTRBOT_DASHBOARD_INITIAL_PASSWORD}
+    ports:
+      - "127.0.0.1:6185:6185"
+    volumes:
+      - astrbot_data:/AstrBot/data
+      - ../bot:/AstrBot/data/plugins/alicedev
+      - ../templates:/AstrBot/alicedev-templates
+      - ./astrbot/cmd_config.rendered.json:/AstrBot/data/cmd_config.json:ro
+      - ./astrbot/alicedev_config.rendered.json:/AstrBot/data/config/alicedev_config.json:ro
+      - reports:/srv/alicedev/reports
+    networks: [internal]
+    depends_on:
+      t2i:
+        condition: service_healthy
+    expose: ["6200"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3); raise SystemExit(0 if r.status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  t2i:
+    image: soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e
+    container_name: alicedev-t2i
+    restart: unless-stopped
+    expose: ["8999"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8999), 3); s.close()"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  paseo:
+    image: alicedev/paseo:local
+    container_name: alicedev-paseo
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: deploy/paseo/Dockerfile
+      args:
+        PASEO_ARCH_IMAGE: alicedev/paseo-arch:local
+    environment:
+      PASEO_PASSWORD: ${PASEO_PASSWORD:?set PASEO_PASSWORD}
+      PASEO_HOSTNAMES: ${ALICEDEV_HOST:?set ALICEDEV_HOST}
+      PASEO_LISTEN: 0.0.0.0:6767
+      PASEO_WEB_UI_ENABLED: "true"
+    expose: ["6767"]
+    volumes:
+      - paseo_home:/home/paseo
+      - workspace:/workspace
+      - reports:/srv/alicedev/reports
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:6767/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+networks:
+  edge:
+    name: alicedev-edge
+  internal:
+    name: alicedev
+    internal: true
+
+volumes:
+  astrbot_data:
+    name: alicedev_astrbot_data
+  paseo_home:
+    name: alicedev_paseo_home
+  workspace:
+    name: alicedev_workspace
+  reports:
+    name: alicedev_reports
+  caddy_data:
+    name: alicedev_caddy_data
+  caddy_config:
+    name: alicedev_caddy_config

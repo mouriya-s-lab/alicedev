@@ -1,0 +1,4 @@
+{$ALICEDEV_HOST} {
+    encode gzip
+    reverse_proxy gateway:8080
+}
