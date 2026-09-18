@@ -1,0 +1,4 @@
+aiohttp<4,>=3.10
+markdown-it-py<4,>=3.0
+mdit-py-plugins<1,>=0.4
+Pygments<3,>=2.17
