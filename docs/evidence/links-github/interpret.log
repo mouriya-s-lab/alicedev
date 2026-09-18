@@ -5,3 +5,17 @@ Observed output:
 interpret reply 已创建 s_abcdefghij
 
 The throwaway script invoked /解读 with a GitHub issue URL, used a fake GithubClient and session actor, asserted GithubVar fields and the github_issue template selection, and observed the session confirmation. The script was removed after the run.
+
+Real WebChat runtime (agent-browser, isolated AstrBot on `127.0.0.1:6186`; plugin internal API `6201`):
+
+1. Stopped-Paseo path: stopped shared `paseo-spike` on host port `6777`, sent `/解读 https://github.com/TraderAlice/OpenAlice/issues/1539`, and observed exactly:
+
+   `处理失败：创建会话失败：paseo 暂时不可达，请稍后再试`
+
+   The WebChat turn ended with one bot response and did not fall through to AstrBot's LLM.
+
+2. Running-Paseo path: restarted shared `paseo-spike` on `6777` with its host toolchain, and used a temporary runtime-only copy of the prompt templates whose GitHub `cwd` was `/tmp/alicedev-ws` (the committed templates retain `/workspace/openalice`, which is not present on this host). Sent the same command and observed:
+
+   `已创建 s_lkpp4xmh74`
+
+   This proves the live GitHub prefetch, `/解读` dispatch, Paseo `create_agent`, and WebChat confirmation path. The temporary template copy and runtime container were not committed.
