@@ -1,0 +1,8 @@
+Command (run from /Users/mouriya/Ext/code/alicedev-wt/links-github):
+PYTHONPATH=bot uv run --with aiohttp --python 3.11 python /tmp/alicedev-gateway-client-smoke.py
+
+Observed output:
+gateway response http://gateway/t/redacted-token
+payload {'target': '/h/server/workspace/workspace?open=agent%3Aagent&embed=1', 'user_key': 'webchat:alice', 'ttl_s': 21600}
+
+The throwaway aiohttp server asserted POST /internal/tokens, X-Alicedev-Token, the target/user_key/ttl_s JSON body, and token/url decoding. The script was removed after the run.

@@ -1,0 +1,7 @@
+Command (run from /Users/mouriya/Ext/code/alicedev-wt/links-github):
+PYTHONPATH=bot uv run --with aiohttp --with jinja2 --with python-frontmatter --python 3.11 python /tmp/alicedev-interpret-smoke.py
+
+Observed output:
+interpret reply 已创建 s_abcdefghij
+
+The throwaway script invoked /解读 with a GitHub issue URL, used a fake GithubClient and session actor, asserted GithubVar fields and the github_issue template selection, and observed the session confirmation. The script was removed after the run.
