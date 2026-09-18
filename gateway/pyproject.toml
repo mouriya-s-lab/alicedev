@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alicedev-gateway"
+version = "0.1.0"
+description = "Authenticated Paseo reverse proxy and published report gateway for alicedev"
+requires-python = ">=3.11"
+dependencies = [
+  "aiohttp>=3.10,<4",
+  "markdown-it-py>=3.0,<4",
+  "mdit-py-plugins>=0.4,<1",
+  "Pygments>=2.17,<3",
+]
+
+[project.scripts]
+alicedev-gateway = "alicedev_gateway.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
