@@ -1,0 +1,14 @@
+{
+  "ok": {
+    "file": "ok.png",
+    "description": "完成"
+  },
+  "thinking": {
+    "file": "thinking.png",
+    "description": "思考中"
+  },
+  "confused": {
+    "file": "confused.png",
+    "description": "困惑"
+  }
+}
