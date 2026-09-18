@@ -144,6 +144,8 @@ services:
         PASEO_ARCH_IMAGE: alicedev/paseo-arch:local
     environment:
       PASEO_PASSWORD: ${PASEO_PASSWORD:?set PASEO_PASSWORD}
+      ALICEDEV_INTERNAL_API: http://astrbot:6200
+      ALICEDEV_INTERNAL_TOKEN: ${ALICEDEV_INTERNAL_TOKEN:?set ALICEDEV_INTERNAL_TOKEN}
       # paseo validates Host on both internal bot calls and public gateway calls.
       PASEO_HOSTNAMES: paseo,${ALICEDEV_HOST:?set ALICEDEV_HOST},localhost
       PASEO_LISTEN: 0.0.0.0:6767

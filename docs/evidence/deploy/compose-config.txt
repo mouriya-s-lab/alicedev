@@ -23,6 +23,7 @@ astrbot ports=127.0.0.1:6185->6185; networks=internal
 t2i ports=[]; networks=internal
 paseo ports=[]; networks=internal
 paseo hostnames=paseo,alicedev.237575.xyz,localhost
+paseo internal api=http://astrbot:6200 with ALICEDEV_INTERNAL_TOKEN from env
 gateway reports mount target=/srv/alicedev/reports/_published read_only=true volume.subpath=_published
 ```
 

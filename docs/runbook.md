@@ -172,6 +172,9 @@ the DNS host. Do not remove either name or leave the public value empty. Restart
 will make all gateway in-memory one-time tokens invalid; already issued paseo
 分享 cookie 仍受签名与过期时间约束，但用户必须重新走 `/t/<token>` 获取入口。
 报告链接是公开 bearer URL，不能当作私有 ACL。
+Paseo launches the omp children with `ALICEDEV_INTERNAL_API=http://astrbot:6200`
+and `ALICEDEV_INTERNAL_TOKEN`; never change that container-to-container URL to
+`localhost`.
 
 插件源码或模板更新后：
 
