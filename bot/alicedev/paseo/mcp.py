@@ -119,11 +119,15 @@ class MCPPaseoControl(PaseoControl):
 
     async def create(
         self, *, session_ref: str, provider: str, model: str, thinking: str,
-        cwd: str, title: str,
+        cwd: str, title: str, initial_prompt: str,
     ) -> AgentHandle:
+        if not model:
+            raise PaseoError("paseo MCP create_agent requires a model (provider/model form)")
         args: dict[str, Any] = {
             "title": title,
-            "provider": f"{provider}/{model}" if model else provider,
+            "provider": f"{provider}/{model}",
+            "initialPrompt": initial_prompt,
+            "background": True,
             "labels": {LABEL_KEY: session_ref},
             "relationship": {"kind": "detached"},
             "workspace": {"kind": "create", "source": {"kind": "directory", "path": cwd}},

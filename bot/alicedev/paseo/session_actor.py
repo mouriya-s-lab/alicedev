@@ -44,6 +44,13 @@ def build_ingress_command(*, session_ref: str, msg_ref: str, text: str) -> str:
     return f"/chat_ingress {payload}"
 
 
+def _with_session_ref(vars: "TemplateVars", session_ref: str):
+    """Return a copy of ``vars`` with ``session_ref`` filled in (frozen dataclass)."""
+    import dataclasses
+
+    return dataclasses.replace(vars, session_ref=session_ref)
+
+
 class SessionActor:
     def __init__(
         self,
@@ -86,41 +93,52 @@ class SessionActor:
         platform_message_id: str | None,
         sender_key: str | None,
     ) -> SessionRecord:
-        """Open a session (creating -> active) then inject the rendered first turn."""
+        """Open a session (creating -> active); the rendered first turn rides on
+        ``create`` as the initial prompt (§4 spike: MCP create requires it). The
+        ingress command wraps it so the omp extension intercepts it before the
+        model."""
         session_ref = new_session_ref()
         provider = self._config.paseo_provider
         model = template.model or self._config.paseo_model
         thinking = template.effort or self._config.paseo_thinking
         cwd = template.cwd or self._config.paseo_cwd
 
+        vars_with_ref = _with_session_ref(vars, session_ref)
+        rendered = self._templates.render(template, vars_with_ref)
+        msg_ref = new_msg_ref()
+        ingress = build_ingress_command(
+            session_ref=session_ref, msg_ref=msg_ref, text=rendered
+        )
+
         await self._sessions.create_creating(
             session_ref=session_ref, chat_key=chat_key, template=template.name,
             created_by=created_by, provider=provider, model=model, thinking=thinking,
         )
-        handle = None
-        try:
-            handle = await self._paseo.create(
-                session_ref=session_ref, provider=provider, model=model,
-                thinking=thinking, cwd=cwd, title=f"alicedev {session_ref}",
-            )
-        except PaseoError as exc:
-            _LOG.warning("create failed for %s, trying find_by_label: %s", session_ref, exc)
-            handle = await self._paseo.find_by_label(session_ref)
-            if handle is None:
-                await self._sessions.set_status(session_ref, SessionStatus.FAILED)
-                raise SessionActorError(f"paseo create failed: {exc}") from exc
+        async with self._lock_for(session_ref):
+            try:
+                handle = await self._paseo.create(
+                    session_ref=session_ref, provider=provider, model=model,
+                    thinking=thinking, cwd=cwd, title=f"alicedev {session_ref}",
+                    initial_prompt=ingress,
+                )
+            except PaseoError as exc:
+                _LOG.warning("create failed for %s, trying find_by_label: %s", session_ref, exc)
+                handle = await self._paseo.find_by_label(session_ref)
+                if handle is None:
+                    await self._sessions.set_status(session_ref, SessionStatus.FAILED)
+                    raise SessionActorError(f"paseo create failed: {exc}") from exc
 
-        await self._sessions.set_active(
-            session_ref, agent_id=handle.agent_id, workspace_id=handle.workspace_id,
-            server_id=handle.server_id, provider=provider, model=model, thinking=thinking,
-        )
+            await self._sessions.set_active(
+                session_ref, agent_id=handle.agent_id, workspace_id=handle.workspace_id,
+                server_id=handle.server_id, provider=provider, model=model, thinking=thinking,
+            )
+            await self._messages.insert(
+                msg_ref=msg_ref, session_ref=session_ref, chat_key=chat_key,
+                platform_message_id=platform_message_id, sender_key=sender_key, text=rendered,
+            )
+            await self._sessions.touch(session_ref)
         record = await self._sessions.get(session_ref)
         assert record is not None
-
-        rendered = self._templates.render(template, vars)
-        await self._inject_locked(
-            record, rendered, platform_message_id=platform_message_id, sender_key=sender_key
-        )
         return record
 
     # --- continuation ---------------------------------------------------

@@ -184,20 +184,14 @@ class AliceDevPlugin(Star):
             len(registry.all()), len(templates.all()),
         )
 
-    @filter.regex(r"^\s*[/／]")
-    async def on_slash_command(self, event: AstrMessageEvent):
-        if self._dispatcher is not None:
-            await self._dispatcher.handle_slash(event)
-        event.stop_event()
-
     @filter.event_message_type(filter.EventMessageType.ALL)
-    async def on_bare_link(self, event: AstrMessageEvent):
+    async def on_message(self, event: AstrMessageEvent):
         if self._dispatcher is None:
             return
         try:
-            await self._dispatcher.handle_bare_link(event)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("bare-link routing failed")
+            await self._dispatcher.handle_message(event)
+        except Exception:  # noqa: BLE001 - never crash the adapter pipeline
+            _LOG.exception("message dispatch failed")
 
     async def terminate(self) -> None:
         # Draining order: stop accepting -> sweeper -> paseo transport -> store.

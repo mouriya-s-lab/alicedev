@@ -212,7 +212,7 @@ def _parse_template(path: Path) -> PromptTemplate:
         harness=str(meta.get("harness", "omp")),
         model=str(meta.get("model", "")),
         effort=str(meta.get("effort", "high")),
-        cwd=str(meta.get("cwd", "/workspace/alicedev")),
+        cwd=str(meta.get("cwd", "") or ""),
         record=(str(meta["record"]) if meta.get("record") else None),
         reply=reply,
         body=post.content,

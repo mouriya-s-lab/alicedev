@@ -5,9 +5,8 @@ trigger:
 aliases: [req]
 description: 记录群友需求并交给 AI 分析
 harness: omp
-model: ""
+model: anthropic/claude-fable-5-1
 effort: high
-cwd: /workspace/alicedev
 record: requirement
 reply:
   kinds: [text, image_template]

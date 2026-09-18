@@ -95,28 +95,59 @@ class CommandDispatcher:
         self._registry = registry
         self._services = services
 
-    async def handle_slash(self, event: "AstrMessageEvent") -> bool:
-        """Dispatch a slash command. Returns True if a command was handled."""
+    async def handle_message(self, event: "AstrMessageEvent") -> bool:
+        """Single entrypoint for every message.
+
+        AstrBot's waking stage strips the ``/`` wake prefix before plugin filters
+        run, so ``event.message_str`` may be the bare ``需求 ...``. We recover the
+        command token from the raw inbound text (which still carries the prefix)
+        or, when the bot was woken, from the stripped text, resolve it against the
+        registry, run it, and stop the event so AstrBot does not forward to the LLM.
+        Returns True if a command was handled.
+        """
         config = self._services.config
         if not config.chat_allowed(event.unified_msg_origin):
             _LOG.info("chat not allowed: %s", event.unified_msg_origin)
             return False
-        parsed = parse_command(event.message_str)
-        if parsed is None:
-            return False
-        token, args = parsed
-        spec = self._registry.resolve(token)
-        if spec is None:
-            return False
-        ctx = build_context(event, self._services, args)
-        if spec.admin_only and not ctx.is_admin:
-            _LOG.info("permission denied: %s /%s", ctx.user_key, token)
-            return False
+        resolved = self._resolve_command(event)
+        if resolved is not None:
+            spec, args = resolved
+            ctx = build_context(event, self._services, args)
+            if spec.admin_only and not ctx.is_admin:
+                _LOG.info("permission denied: %s /%s", ctx.user_key, spec.name)
+                event.stop_event()
+                return False
+            try:
+                await spec.handler(ctx)
+            except Exception:  # noqa: BLE001 - a bad handler must not crash the adapter
+                _LOG.exception("command handler failed: /%s", spec.name)
+            event.stop_event()
+            return True
+        return await self.handle_bare_link(event)
+
+    def _resolve_command(self, event: "AstrMessageEvent"):
+        """Return ``(CommandSpec, args)`` if the message is a known command."""
+        raw = ""
         try:
-            await spec.handler(ctx)
-        except Exception:  # noqa: BLE001 - a bad handler must not crash the adapter
-            _LOG.exception("command handler failed: /%s", token)
-        return True
+            raw = event.message_obj.message_str or ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+        stripped = (event.message_str or "").strip()
+        # 1) raw text still carrying the slash prefix.
+        parsed = parse_command(raw) or parse_command(stripped)
+        if parsed is not None:
+            token, args = parsed
+            spec = self._registry.resolve(token)
+            if spec is not None:
+                return spec, args
+        # 2) prefix stripped by the waking stage: try the first bare token.
+        woke = bool(getattr(event, "is_at_or_wake_command", False)) or raw.strip()[:1] in ("/", "／")
+        if woke and stripped:
+            token, _, rest = stripped.partition(" ")
+            spec = self._registry.resolve(token.strip())
+            if spec is not None:
+                return spec, rest.strip()
+        return None
 
     async def handle_bare_link(self, event: "AstrMessageEvent") -> bool:
         """Auto-route a message that is (only) a GitHub issue/PR link.
@@ -143,8 +174,14 @@ class CommandDispatcher:
         if template is None:
             return False
         try:
+            import dataclasses
+
+            from alicedev.commands.requirement import build_template_vars
+
             item = await github.fetch(ref)
-            vars = github.to_template_vars(item)
+            gh_vars = github.to_template_vars(item)
+            ctx = build_context(event, self._services, text)
+            vars = dataclasses.replace(build_template_vars(ctx), github=gh_vars.github)
         except Exception:  # noqa: BLE001
             _LOG.exception("github link fetch failed")
             return False

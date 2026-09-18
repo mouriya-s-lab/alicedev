@@ -58,8 +58,14 @@ class PaseoControl(abc.ABC):
         thinking: str,
         cwd: str,
         title: str,
+        initial_prompt: str,
     ) -> AgentHandle:
-        """Create an agent WITHOUT an initial prompt; label it with session_ref."""
+        """Create an agent whose first turn is ``initial_prompt``.
+
+        Spike verdict (§4): MCP ``create_agent`` requires ``initialPrompt``, so the
+        bridge passes the ``/chat_ingress`` command as the initial prompt; the omp
+        extension intercepts it before the model, keeping the msg id hidden.
+        """
 
     @abc.abstractmethod
     async def find_by_label(self, session_ref: str) -> AgentHandle | None:
