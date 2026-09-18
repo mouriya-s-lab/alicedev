@@ -86,15 +86,19 @@
 - 本机 `tg` = kabi-tg-cli，用户 2026-09-19 已重登（user id 865341181）；仅作备用，不主动用。
 - 平台接入由 AstrBot 负责。
 
-## 9. 默认决策（用户已授权）
+## 9. 默认决策（用户已授权；评审后细化，详见 ARCHITECTURE.md）
 
 - session 续注入：引用 bot 回复 / 显式 `/继续 <id>`；不自动续。
 - 权限：群白名单 + 管理员列表在插件配置；生成 URL 仅管理员。
-- 反向 CLI：本机 unix socket，无网络暴露。
+- 反向 CLI：`alicedev-reply` 走 docker 内部网络 HTTP + 共享 header 密钥，不映射主机端口（取代最初的 unix socket 设想，三容器共享更简单）。
 - 收藏标识：`platform:group:user` 三元组，QQ/TG 通用。
-- 调查报告落盘：固定目录（网关白名单根），AI 写文件后回 token URL。
-- 网关：轻量自写反代；表情包目录配置；`/需求` 全员可用；UI 文案中文。
+- 调查报告：AI 写到共享卷 `REPORTS_ROOT`；bot 校验并复制到 `_published/<report_id>/`；报告链接是公开 bearer URL（128 bit id），因为要贴进群给多人反复打开；不做 cookie 门槛。
+- 网关：轻量自写反代（必须，因 paseo 密码走 WS 子协议，Caddy 无法注入）；分享 cookie 授权整个 paseo UI（接收者为受信社区成员，embed 只是 UX 收敛）。
+- 12h 空闲关闭：由 bot 的 sweeper 执行（bot 是唯一同时看到注入与回复的进程；paseo 无 idle 事件），调用 paseo 的 close（MCP `kill_agent` = 可恢复 close）。这偏离用户「harness/paseo 侧车」的设想，结果行为一致，已在最终报告中说明。
+- ingress：注入文本为 omp 扩展命令 `/chat_ingress {json}`（omp 在 rpc 模式不触发 `input` 事件，marker 方案不可行）。
+- 表情包目录配置；`/需求` 全员可用；UI 文案中文。
 
 ## 10. 进度
 
 见 `todo` 与 `ctx list`。阶段：Framing → Design → Build → Verification。
+- 2026-09-19：ARCHITECTURE.md v2 定稿（两轮评审后）；repos 建好：`mouriya-s-lab/alicedev`、`mouriya-s-lab/paseo-alicedev`（本地 `~/Ext/code/paseo-alicedev`，基于 mouriya-s-lab/paseo main 7ab7c444d）；DNS 已建。下一步：spike + 并行切片。
