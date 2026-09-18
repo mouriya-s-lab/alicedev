@@ -22,7 +22,7 @@ gateway ports=[]; networks=internal
 astrbot ports=127.0.0.1:6185->6185; networks=internal
 t2i ports=[]; networks=internal
 paseo ports=[]; networks=internal
-paseo hostnames=alicedev.237575.xyz
+paseo hostnames=paseo,alicedev.237575.xyz,localhost
 gateway reports mount target=/srv/alicedev/reports/_published read_only=true volume.subpath=_published
 ```
 

@@ -166,8 +166,10 @@ ssh -tt nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec paseo paseo provider diagnostic omp'
 ```
 
-宿主机的 `PASEO_HOSTNAMES` 必须包含 `${ALICEDEV_HOST}`；通过公网域名访问时不要
-把它留空。重启/更新会让网关内存中的一次性 token 全部失效；已经签发的 paseo
+Compose sets `PASEO_HOSTNAMES` to `paseo,${ALICEDEV_HOST},localhost`: the internal
+bot→paseo request uses `Host: paseo`, while the gateway's public reverse proxy uses
+the DNS host. Do not remove either name or leave the public value empty. Restart/update
+will make all gateway in-memory one-time tokens invalid; already issued paseo
 分享 cookie 仍受签名与过期时间约束，但用户必须重新走 `/t/<token>` 获取入口。
 报告链接是公开 bearer URL，不能当作私有 ACL。
 
