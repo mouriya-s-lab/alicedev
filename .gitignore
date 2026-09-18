@@ -1,0 +1,12 @@
+# python
+__pycache__/
+.venv/
+*.duckdb
+data/
+
+# node
+node_modules/
+dist/
+
+# deploy
+deploy/.env
