@@ -20,7 +20,7 @@ services:
     platform: linux/amd64
     container_name: alicedev-reports-init
     restart: "no"
-    command: ["sh", "-ec", "mkdir -p /reports/_published"]
+    command: ["sh", "-ec", "mkdir -p /reports/_published && chown 1000:1000 /reports /reports/_published"]
     volumes:
       - reports:/reports
 
