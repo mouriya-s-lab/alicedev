@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; --wash:#f7f9fc; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:30px; background:var(--wash); color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:20px; line-height:1.48; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:24px 28px 20px; background:linear-gradient(135deg,#fff5e8,#fffaf4); border-bottom:1px solid var(--line); }
+    .eyebrow { color:#b66b12; font-size:17px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:31px; line-height:1.25; }
+    .subhead { margin-top:6px; color:var(--muted); font-size:17px; }
+    main { padding:14px 20px 18px; }
+    .row { display:grid; grid-template-columns:76px 1fr; gap:14px; padding:17px 8px; border-bottom:1px solid var(--line); }
+    .row:last-child { border-bottom:0; }
+    .number { color:#b66b12; font-weight:700; font-size:18px; padding-top:2px; }
+    .content { min-width:0; }
+    .text { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+    .author { margin-top:6px; color:var(--muted); font-size:16px; }
+    .thumbs { display:flex; gap:9px; flex-wrap:wrap; margin-top:10px; }
+    .thumbs img { width:82px; height:82px; object-fit:cover; border-radius:10px; border:1px solid var(--line); }
+    .empty { padding:32px 8px; color:var(--muted); text-align:center; }
+    footer { padding:15px 28px 18px; border-top:1px solid var(--line); color:var(--muted); font-size:16px; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">alicedev</div>
+      <h1>{{ title|default("收藏夹") }}</h1>
+      {% if subtitle %}<div class="subhead">{{ subtitle }}</div>{% endif %}
+    </header>
+    <main>
+      {% if rows %}
+        {% for row in rows %}
+        <article class="row">
+          <div class="number">#{{ row.id|default(loop.index) }}</div>
+          <div class="content">
+            <div class="text">{{ row.text|default("") }}</div>
+            {% if row.author_name or row.saver_name or row.created_at %}<div class="author">{{ row.author_name|default("匿名") }}{% if row.saver_name %} · 收藏：{{ row.saver_name }}{% endif %}{% if row.created_at %} · {{ row.created_at }}{% endif %}</div>{% endif %}
+            {% if row.images %}<div class="thumbs">{% for image in row.images %}<img src="{{ image }}" alt="收藏图片">{% endfor %}</div>{% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      {% else %}<div class="empty">暂时没有收藏</div>{% endif %}
+    </main>
+    {% if footer %}<footer>{{ footer }}</footer>{% endif %}
+  </section>
+</body>
+</html>

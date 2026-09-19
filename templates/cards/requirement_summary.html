@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; }
+    * { box-sizing: border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:32px; background:#f7f9fc; color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:23px; line-height:1.6; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:26px 30px 22px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); font-size:18px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:34px; line-height:1.25; }
+    main { padding:27px 30px 30px; }
+    .label { color:var(--muted); font-size:18px; }
+    .body { margin-top:7px; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+    .images { display:flex; gap:12px; flex-wrap:wrap; margin-top:22px; }
+    .images img { width:128px; height:128px; object-fit:cover; border-radius:12px; border:1px solid var(--line); }
+    .meta { color:var(--muted); font-size:18px; margin-top:25px; }
+    footer { padding:16px 30px 20px; border-top:1px solid var(--line); color:var(--muted); font-size:17px; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">需求记录</div>
+      <h1>{{ title|default("需求") }}</h1>
+    </header>
+    <main>
+      {% if author_name or sender_name %}<div class="label">提出者</div><div>{{ author_name|default(sender_name) }}</div>{% endif %}
+      <div class="label" style="margin-top:20px">内容</div>
+      <div class="body">{{ text or requirement }}</div>
+      {% if images %}
+      <div class="images">
+        {% for image in images %}<img src="{{ image }}" alt="引用图片">{% endfor %}
+      </div>
+      {% endif %}
+      {% if meta %}<div class="meta">{{ meta }}</div>{% endif %}
+    </main>
+    {% if footer %}<footer>{{ footer }}</footer>{% endif %}
+  </section>
+</body>
+</html>

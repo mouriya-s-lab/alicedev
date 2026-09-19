@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #667085;
+      --accent: #3767d6;
+      --paper: #f7f9fc;
+      --line: #e4e8f0;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      width: 800px;
+      padding: 32px;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 24px;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: 0 8px 28px rgba(25, 39, 72, .08);
+    }
+    header {
+      padding: 26px 30px 22px;
+      background: linear-gradient(135deg, #edf3ff 0%, #f8fbff 100%);
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow { color: var(--accent); font-size: 18px; font-weight: 700; letter-spacing: .08em; }
+    h1 { margin: 4px 0 0; font-size: 34px; line-height: 1.25; }
+    main { padding: 28px 30px 32px; }
+    .text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .meta { color: var(--muted); font-size: 18px; margin-top: 24px; }
+    footer {
+      padding: 16px 30px 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 17px;
+    }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      {% if eyebrow %}<div class="eyebrow">{{ eyebrow }}</div>{% endif %}
+      <h1>{{ title|default("alicedev") }}</h1>
+    </header>
+    <main>
+      <div class="text">{{ text or body }}</div>
+      {% if meta %}<div class="meta">{{ meta }}</div>{% endif %}
+    </main>
+    {% if footer %}<footer>{{ footer }}</footer>{% endif %}
+  </section>
+</body>
+</html>
