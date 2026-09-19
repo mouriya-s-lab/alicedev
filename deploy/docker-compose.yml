@@ -118,7 +118,7 @@ services:
       - ../bot:/AstrBot/data/plugins/alicedev
       - ../templates:/AstrBot/alicedev-templates
       - reports:/srv/alicedev/reports
-    networks: [internal]
+    networks: [internal, edge]   # edge = egress for Telegram API / GitHub / t2i is internal
     depends_on:
       t2i:
         condition: service_healthy
@@ -171,7 +171,7 @@ services:
       - paseo_home:/home/paseo
       - workspace:/workspace
       - reports:/srv/alicedev/reports
-    networks: [internal]
+    networks: [internal, edge]   # edge = egress for the model provider API and git clones
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:6767/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
