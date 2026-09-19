@@ -135,6 +135,10 @@ async def cookie_gate_middleware(
     handler: web.Handler,
 ) -> web.StreamResponse:
     path = request.path
+    if path == "/_alicedev/health":
+        if request.method not in {"GET", "HEAD"}:
+            raise web.HTTPMethodNotAllowed(request.method, {"GET", "HEAD"})
+        return await handler(request)
     if path == "/internal/tokens":
         if request.method != "POST":
             raise web.HTTPMethodNotAllowed(request.method, {"POST"})
