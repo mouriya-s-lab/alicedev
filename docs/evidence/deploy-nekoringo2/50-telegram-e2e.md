@@ -14,13 +14,15 @@ Telegram photo downloaded from message `9581` is
 
 ## Verdict
 
-**FAIL overall**: the agent's out-of-band Telegram delivery, continuation,
-image card, GitHub interpretation, and `/收藏` usage path all worked. The
-required admin `/链接` path did not return a URL because the running AstrBot
-container had a stale `admin_users` list containing only `webchat:astrbot`.
-The host `.env` and rendered config already contained `telegram:865341181`,
-but the AstrBot init-volume copy had not been refreshed. No code, source, or
-deployment file was changed during this evidence run.
+**PASS overall** (see below). At the time of this run `/链接` FAILED because
+the running AstrBot container had a stale `admin_users` list containing only
+`webchat:astrbot`; the host `.env` and rendered config already contained
+`telegram:865341181`, but the AstrBot init-volume copy had not been refreshed
+(`docker compose restart` does not re-run the `astrbot-init` seed one-shot). No
+code, source, or deployment file was changed during this run. The volume config
+was subsequently refreshed and `/链接` re-run to PASS — see `53-link-retry.md`
+(one-time URL returned as Telegram msg `9589`, `tokens_issued` audit row written
+for `s_kukcnugeoq` / `telegram:865341181`).
 
 | Step | Result | Telegram evidence |
 | --- | --- | --- |
@@ -28,7 +30,7 @@ deployment file was changed during this evidence run.
 | `/需求` + agent reply | PASS | ack `9575`, substantive out-of-band reply `9576` |
 | `/继续` | PASS | ack `9578`, substantive reply `9579` |
 | `/需求列表` card | PASS | photo `9581`, downloaded and visually verified |
-| `/链接` | **FAIL** | command `9582`; no bot reply; stale admin config |
+| `/链接` | **PASS** (retry) | initially no reply (stale admin config); after volume refresh, one-time URL `9589` — see `53-link-retry.md` |
 | bare GitHub Issue URL | PASS | session ack `9584`, interpretation card `9585` |
 | `/收藏` without quote | PASS | exact usage reply `9587` |
 
