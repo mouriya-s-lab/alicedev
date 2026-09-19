@@ -1,11 +1,15 @@
 # alicedev 部署运行手册
 
-本文是 `nekoringo2` 上的首装、升级和排障手册。生产 Compose 只把 AstrBot
-dashboard 绑定到 `127.0.0.1:6185`；公网入口只有 Caddy 的 80/443，Caddy
-再转发到内部 gateway。不要把 paseo、gateway、AstrBot 内部 API 或 t2i 端口
-发布到主机。
-Compose 还会启动一个短命的 `reports-init` helper，只负责在共享卷中创建
-`_published` 子目录，确保 gateway 的只读 subpath mount 在首次启动时存在。
+本文是 `nekoringo2` 上实际部署状态的记录，也是首装、升级和排障手册。
+生产 Compose 只把 AstrBot dashboard 绑定到 `127.0.0.1:6185`；公网入口只有
+Caddy 的 80/443，Caddy 再转发到内部 gateway。不要把 paseo、gateway、AstrBot
+内部 API 或 t2i 端口发布到主机。
+Compose 还会启动两个短命 helper：`reports-init` 在共享卷中创建 `_published`
+子目录，并把报告卷 chown 到 1000:1000（容器内 `paseo` 用户），确保 gateway
+的只读 subpath mount 在首次启动时存在且 agent 可写报告；`astrbot-init` 在每次
+`up` 时把渲染后的 `cmd_config.rendered.json` / `alicedev_config.rendered.json`
+复制进 `astrbot_data` 卷（此前只读单文件 bind mount 会在 AstrBot 重写配置时
+触发 EBUSY，故改用卷内复制）。
 
 ## 1. 事实与边界
 
@@ -30,8 +34,10 @@ Compose 还会启动一个短命的 `reports-init` helper，只负责在共享�
 
 ## 2. 首次部署
 
-以下步骤把两个仓库都保留在 `/srv/alicedev/src`，同时把 alicedev 的运行树放到
-`/srv/alicedev`，因此 Compose 的相对路径和审计用的源检出都稳定。
+代码交付走从运维 Mac 的 rsync，不在服务端做版本库检出（两个仓库都是私有库，
+服务端没有 deploy key）。alicedev 运行树在服务端的 `/srv/alicedev`；`src` 下
+只保留 `paseo-alicedev` 一个检出（Compose 构建 Arch 基础镜像的
+`PASEO_REPO_CONTEXT`），不存在 `/srv/alicedev/src/alicedev`。
 
 ### 2.1 主机预检查与镜像记录
 
@@ -54,39 +60,56 @@ ssh nekoringo2 'for ref in caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b
 若镜像 registry 或 digest 发生变化，先更新 Compose pin 和本节记录，再继续；不要
 为了“先跑起来”改成无 pin 的 `latest`。
 
-### 2.2 检出源码
+### 2.2 同步源码（rsync 推送）
+
+先在 Mac 上跑 `make harness`（`harness/dist` 产物随同步发往服务端，不在服务端
+构建），记下两个本地检出的 commit，再同步：
 
 ```bash
-ssh nekoringo2 'git clone https://github.com/mouriya-s-lab/alicedev.git /srv/alicedev/src/alicedev'
-ssh nekoringo2 'git clone https://github.com/mouriya-s-lab/paseo-alicedev.git /srv/alicedev/src/paseo-alicedev'
-ssh nekoringo2 'rsync -a --exclude .git/ /srv/alicedev/src/alicedev/ /srv/alicedev/'
-ssh nekoringo2 'cd /srv/alicedev && git -C src/alicedev rev-parse HEAD && git -C src/paseo-alicedev rev-parse HEAD'
+make harness
+git rev-parse HEAD
+git -C /Users/mouriya/Ext/code/paseo-alicedev rev-parse HEAD
+rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' /Users/mouriya/Ext/code/alicedev/ nekoringo2:/srv/alicedev/
+ssh nekoringo2 mkdir -p /srv/alicedev/src/paseo-alicedev && rsync -az --delete --exclude '.git/' --exclude 'node_modules/' /Users/mouriya/Ext/code/paseo-alicedev/ nekoringo2:/srv/alicedev/src/paseo-alicedev/
 ```
 
-升级时在两个 `src` 检出分别审阅 commit，再把 alicedev 工作树同步到根目录；不要
-把 `src/paseo-alicedev` 当作可删除的 build cache。
+说明：`deploy/.env` 和 `deploy/astrbot/*.rendered.json` 只存在于服务端，
+同步时排除，不会被 Mac 侧覆盖。升级时先在 Mac 检出审阅 commit，记下同步时刻的
+`git rev-parse HEAD`（即审计依据），再走同一组 rsync；不要把
+`src/paseo-alicedev` 当作可删除的 build cache。
 
 ### 2.3 环境、渲染和构建
 
+首装时才从模板创建服务端 `deploy/.env`（`0600`），之后升级走 §2.2 的 rsync
+（`.env` 被排除，不会被覆盖）：
+
 ```bash
 ssh nekoringo2 'cd /srv/alicedev && cp deploy/.env.example deploy/.env && chmod 600 deploy/.env'
-ssh nekoringo2 "sed -i 's#^PASEO_REPO_CONTEXT=.*#PASEO_REPO_CONTEXT=../src/paseo-alicedev#' /srv/alicedev/deploy/.env"
 # 在受控终端编辑 deploy/.env；填入秘密，但不要把文件内容输出到日志。
 ssh -tt nekoringo2 'cd /srv/alicedev && ${EDITOR:-vi} deploy/.env'
-ssh nekoringo2 'cd /srv/alicedev && make harness'
-ssh nekoringo2 'cd /srv/alicedev && make render-config'
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml config --quiet'
 ```
+
+服务端 `deploy/.env` 中 `PASEO_REPO_CONTEXT=../src/paseo-alicedev`（指向 §2.2
+同步来的检出）。所有 Compose 调用统一从 `/srv/alicedev` 发起：
+`docker compose -f deploy/docker-compose.yml --env-file deploy/.env ...`
+（与 `make build`、`make up`、`make workspace-init` 等价）。
 
 `make render-config` 会把 `deploy/astrbot/cmd_config.json` 和
 `deploy/astrbot/alicedev_config.json` 渲染成仅存在于部署工作树的
 `*.rendered.json`。前者预置 Telegram、WebChat 和 `t2i_endpoint=http://t2i:8999`；
 后者把 paseo/gateway/报告卷和 `/AstrBot/alicedev-templates` 传给插件。模板
-文件使用 JSON 安全转义，不能用手工 `sed` 替换密码。
+文件使用 JSON 安全转义，不能用手工 `sed` 替换密码。`astrbot-init` 在每次 `up`
+时把渲染产物复制进 `astrbot_data` 卷。
 
 镜像构建分两步：先由 Compose 从 `PASEO_REPO_CONTEXT` 的
-`docker/arch/Dockerfile` 构建 Arch 基础镜像，再构建 alicedev paseo child image
-并 COPY `make harness` 的两个产物。构建和启动：
+`docker/arch/Dockerfile` 构建基础镜像 `alicedev/paseo-arch:local`（build args：
+`EXPO_PUBLIC_PASEO_SELFHOSTED=true`、`EXPO_PUBLIC_LOCAL_DAEMON=self-hosted`、
+`PASEO_VERSION=0.8.0`、`OMP_VERSION=18.2.5`；服务端完整构建约 20 分钟），再构建
+alicedev paseo child image `alicedev/paseo:local`（`deploy/paseo/Dockerfile`，
+COPY §2.2 随同步发来的 `harness/dist` 产物），以及 `alicedev/gateway:local`
+（只改 gateway 时 `docker compose ... build gateway && ... up -d gateway`，
+约 15 秒）。构建和启动：
 
 ```bash
 ssh nekoringo2 'cd /srv/alicedev && make build'
@@ -94,15 +117,25 @@ ssh nekoringo2 'cd /srv/alicedev && make up'
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps'
 ```
 
-首次启动后再初始化 workspace 卷：克隆 OpenAlice 并创建 alicedev 目录（可重复执行，
-已存在时跳过克隆）：
+当前服务：`caddy`、`gateway`、`astrbot`、`t2i`、`paseo` 全部 healthy，
+另有两个一次性 helper：`reports-init`、`astrbot-init`。其中 astrbot 和 paseo
+还接入 `edge` 网络，用于出站访问（LLM API、GitHub）。
+
+首次启动后再初始化 workspace 卷：`make workspace-init` 把 OpenAlice 克隆到
+workspace 卷的 `/workspace/openalice`（可重复执行，已存在时跳过克隆）：
 
 ```bash
 ssh nekoringo2 'cd /srv/alicedev && make workspace-init'
 ```
 
-`make up` 不会重新 build；源码或 harness 变化后先跑 `make build`。`make down` 不
-删除卷，避免误删会话、omp 凭据、workspace 和报告。
+`make up` 不会重新 build；源码或 harness 变化后先走 §2.2 的 rsync，再跑
+`make build`。`make down` 不删除卷，避免误删会话、omp 凭据、workspace 和报告。
+
+轮换 `GATEWAY_SECRET`、`ALICEDEV_INTERNAL_TOKEN`、`PASEO_PASSWORD`
+（都只在服务端的 `deploy/.env`，`0600`）后，必须重跑 `make render-config`
+再 `docker compose ... up -d`（`astrbot-init` 会重新播种配置）。轮换
+`GATEWAY_SECRET` 会让已发分享 cookie 失效；重启 gateway 会让未消费的一次性
+token 失效。
 
 ## 3. Caddy 与 TLS 首装验收
 
@@ -163,15 +196,19 @@ VM/CT placement、Docker stack、应用 secrets、Caddy 配置和 QQ 协议端�
 ## 5. paseo provider、omp 凭据与插件 reload
 
 Compose 只把 `omp` 和 `omp-alicedev` provider 配置装入 paseo child image；真实 omp
-登录态由 operator 放进持久化 `paseo_home`，例如在容器内以 `paseo` 用户检查
-`/home/paseo/.omp/` 下的配置文件。不要把 API key、cookie、刷新 token 或完整目录
-复制到仓库：
+登录态（provider `opencode-go` 的 API key）由 operator 放进持久化 `paseo_home`
+卷的 `/home/paseo/.omp/` 下。模板统一使用模型
+`opencode-go/muse-spark-1.3-contributor`。不要把 API key、cookie、刷新 token
+或完整目录复制到仓库：
 
 ```bash
 ssh -tt nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec --user paseo paseo sh'
 # 在上述受控 shell 中，由 operator 按 omp 文档完成登录/写入 /home/paseo/.omp/。
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml exec paseo paseo provider diagnostic omp'
 ```
+
+paseo workspace 自动命名会先试 `opencode-zen/*` 系列模型（返回 402/400），再回退
+到 `opencode-go/minimax-m3`；paseo 日志里的这类 warning 是噪声，不是故障。
 
 Compose sets `PASEO_HOSTNAMES` to `paseo,${ALICEDEV_HOST},localhost`: the internal
 bot→paseo request uses `Host: paseo`, while the gateway's public reverse proxy uses
@@ -183,13 +220,20 @@ Paseo launches the omp children with `ALICEDEV_INTERNAL_API=http://astrbot:6200`
 and `ALICEDEV_INTERNAL_TOKEN`; never change that container-to-container URL to
 `localhost`.
 
+验证入口是 AstrBot dashboard 内置 WebChat（平台名 `webchat`）。已验证 10 个指令：
+`/alicedev`（帮助）、`/需求`、`/继续`、`/需求列表`、`/收藏`、`/帮我调查`、
+`/链接`、`/解读`、`/归档`、`/收藏夹`；模板 4 个：`requirement`、`investigate`、
+`github-issue`、`github-pr`。
+
 插件源码或模板更新后：
 
-1. `make build`（只有 child image 或 harness 变化时必须；模板和 bot bind mount
-   变化通常不需要重建）。
+1. 先走 §2.2 的 rsync 同步；`make build`（只有 child image 或 harness 变化时必须；
+   模板和 bot bind mount 变化通常不需要重建）。
 2. 在 SSH 隧道中访问 AstrBot dashboard：
-   `ssh -N -L 6185:127.0.0.1:6185 nekoringo2`，浏览器打开
-   `http://127.0.0.1:6185`。
+   `ssh -N -L 16185:127.0.0.1:6185 nekoringo2`，浏览器打开
+   `http://127.0.0.1:16185`。dashboard 用户名 `astrbot`；密码 2026-09-19 已轮换
+   （AstrBot 要求含大写字母、数字且 ≥8 位），只存放在服务端
+   `nekoringo2:/root/alicedev-dashboard-password`（`0600`），不在其他位置记录。
 3. `Extensions → Plugins → Reload Extension`，确认日志重新出现
    `alicedev initialized`；若只改了平台配置或依赖，执行
    `docker compose restart astrbot`。
@@ -274,7 +318,9 @@ BotFather token 只写入 `deploy/.env` 的 `TELEGRAM_BOT_TOKEN`，执行
 `make render-config` 后由渲染文件提供给 AstrBot。不要把 token 放到
 `cmd_config.json` 的提交版本、issue、日志、截图或命令行参数中。AstrBot 当前
 Telegram 配置字段和 polling 行为的事实依据见
-[`docs/research/astrbot-api.md:270-290`](research/astrbot-api.md)。
+[`docs/research/astrbot-api.md:270-290`](research/astrbot-api.md)。当前状态：
+`.env` 中的 token 被 Telegram 拒绝为未授权（unauthorized），适配器保留配置但
+未验证通过，见 §9。
 
 ## 8. Troubleshooting
 
@@ -300,7 +346,27 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 ```
 
 不要从浏览器向上游发送 `Authorization` 或 `Sec-WebSocket-Protocol`；这些由 gateway
-按 §8 注入。浏览器应该只连接 HTTPS 公共域名，刷新后仍须持有有效分享 cookie。
+注入。浏览器应该只连接 HTTPS 公共域名，刷新后仍须持有有效分享 cookie。
+
+### 嵌入页 / self-hosted manifest
+
+paseo web bundle 跑在 self-hosted 模式（HTTPS:443 反代后唯一可用的同源模式；
+gateway commit `da1cc54`）。gateway 行为：
+
+- `GET /_paseo/hosts.json`（需分享 cookie）返回
+  `[{"id":"alicedev","label":"alicedev","basePath":"/daemons/alicedev"}]`；
+  网关代理时剥离 `/daemons/alicedev` 前缀再转发给 paseo，浏览器最终拨
+  `wss://alicedev.237575.xyz/daemons/alicedev/ws`。
+- `/` 无分享 cookie 返回 403；`/_alicedev/health` 公开返回 200；bot 内部 API 的
+  `/v1/health` 免 token 鉴权（供 astrbot healthcheck 用）。
+- `/manifest.json` 无 cookie 返回 403 是 PWA manifest 的无害行为，不是部署故障；
+  持有效分享 cookie 重新访问即可。
+
+```bash
+curl -si https://alicedev.237575.xyz/_alicedev/health
+curl -si https://alicedev.237575.xyz/
+curl -si https://alicedev.237575.xyz/manifest.json
+```
 
 ### t2i 与字体
 
@@ -325,3 +391,26 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 若 `cmd_config.rendered.json` 缺失，先确认 `deploy/.env` 非空并重跑
 `make render-config`；不要把模板直接挂载成最终配置。若 paseo 重启后分享链接
 失效，这是预期的内存 token 行为；重新执行 `/链接`，不要复用旧 token。
+
+## 9. 已知限制与证据
+
+### 9.1 当前状态
+
+- 生产入口 `https://alicedev.237575.xyz`，`caddy`、`gateway`、`astrbot`、`t2i`、
+  `paseo` 全部 healthy。
+- 端口行为：`/_alicedev/health` 公开 200；`/` 无分享 cookie 时 403；
+  `/manifest.json` 无 cookie 时 403（PWA manifest，无害，见 §8）。
+
+### 9.2 已知限制
+
+1. AstrBot WebChat ChatUI 不渲染经 `context.send_message` 发送的带外回复：
+   行已写入 `platform_message_history` 且 `reply_deliveries.state=sent`（后端投递
+   成功），只是 WebChat 前端不显示；真实 QQ/Telegram 平台可正常送达。
+2. `.env` 中的 Telegram token 被 Telegram 拒绝为未授权：适配器保留配置但未验证
+   通过。
+3. QQ onboarding 未完成，仍按 §7.1 执行。
+
+### 9.3 证据
+
+部署证据（含 E2E transcript、截图、`share-link-check.md`、`embed-verify.md`）在
+`docs/evidence/deploy-nekoringo2/`。

@@ -78,6 +78,13 @@
 - QQ 协议端：调查跑在哪、能否容器化（NapCat / Lagrange / LLOneBot 等），重点是**掉线/封号风险**；可接受 Linux 容器 + SR-IOV iGPU 加速，前提是不频繁被踢。
 - 插件仓库：本目录 `~/Ext/code/alicedev` → 新建 `mouriya-s-lab/alicedev`。
 - DNS：alicedev.237575.xyz A 160.191.41.242（DNS-only，2026-09-19 经 CF API 手工创建，record id efbc4a92a4a27ea2a5e9bfad5a7f55da；nekoringo2 不归 IaC，若日后纳入 pve-vctcn/apps/dns 需迁移该记录）
+- 生产部署（2026-09-19，nekoringo2 `/srv/alicedev`，入口 https://alicedev.237575.xyz）：`caddy`、`gateway`、`astrbot`、`t2i`、`paseo` 全部 healthy，一次性 helper `reports-init`（创建 `_published` 并把报告卷 chown 到 1000:1000）/`astrbot-init`（每次 `up` 把渲染配置复制进 `astrbot_data` 卷，避开只读 bind mount 的 EBUSY）；astrbot 与 paseo 另接 `edge` 网出站（LLM API、GitHub）。
+- 代码交付走运维 Mac 的 rsync（私有库，服务端无 deploy key）：Mac 先 `make harness`（`harness/dist` 随同步发货）再同步；服务端 `src` 下只有 `paseo-alicedev` 一个检出（`PASEO_REPO_CONTEXT=../src/paseo-alicedev`），没有 `/srv/alicedev/src/alicedev`；审计依据是同步时刻 Mac 检出的 `git rev-parse HEAD`。Compose 统一 `docker compose -f deploy/docker-compose.yml --env-file deploy/.env ...`。
+- 镜像：`alicedev/paseo-arch:local`（paseo-alicedev `docker/arch/Dockerfile`，self-hosted build args，服务端完整构建约 20 分钟）、`alicedev/paseo:local`（`deploy/paseo/Dockerfile`）、`alicedev/gateway:local`（重建约 15 秒）。
+- 网关（`da1cc54`）：paseo web bundle 为 self-hosted 模式；`GET /_paseo/hosts.json`（cookie-gated）返回 daemon 清单，代理时剥离 `/daemons/alicedev` 前缀，浏览器拨 `wss://alicedev.237575.xyz/daemons/alicedev/ws`；`/_alicedev/health` 公开 200，`/` 无 cookie 403，`/manifest.json` 无 cookie 403（PWA，无害），bot 内部 `/v1/health` 免 token。
+- 凭据：`GATEWAY_SECRET`、`ALICEDEV_INTERNAL_TOKEN`、`PASEO_PASSWORD` 只在服务端 `deploy/.env`（`0600`），轮换后重跑 `make render-config` + `up -d`；轮换 `GATEWAY_SECRET` 使已发分享 cookie 失效，重启 gateway 使未消费一次性 token 失效。omp `opencode-go` API key 由 operator 放入 `paseo_home` 卷 `/home/paseo/.omp/`，模板模型 `opencode-go/muse-spark-1.3-contributor`。dashboard 用户 `astrbot`，密码只在 `nekoringo2:/root/alicedev-dashboard-password`（`0600`），隧道 `ssh -N -L 16185:127.0.0.1:6185 nekoringo2`。
+- workspace 卷已有 `/workspace/openalice`（`make workspace-init` 克隆）。
+- 已知限制：WebChat 不渲染带外回复（后端投递成功，属前端显示限制）、Telegram token 未授权、QQ onboarding 未做。证据见 `docs/evidence/deploy-nekoringo2/`。运维细节见 `docs/runbook.md` §9。
 
 ## 8. 测试
 
@@ -102,3 +109,4 @@
 
 见 `todo` 与 `ctx list`。阶段：Framing → Design → Build → Verification。
 - 2026-09-19：ARCHITECTURE.md v2 定稿（两轮评审后）；repos 建好：`mouriya-s-lab/alicedev`、`mouriya-s-lab/paseo-alicedev`（本地 `~/Ext/code/paseo-alicedev`，基于 mouriya-s-lab/paseo main 7ab7c444d）；DNS 已建。下一步：spike + 并行切片。
+- 2026-09-19：nekoringo2 生产部署完成并 healthy（https://alicedev.237575.xyz；caddy/gateway/astrbot/t2i/paseo，helper reports-init/astrbot-init，astrbot+paseo 接 edge 网出站）。WebChat 端到端验证 10 个指令（`/alicedev`、`/需求`、`/继续`、`/需求列表`、`/收藏`、`/帮我调查`、`/链接`、`/解读`、`/归档`、`/收藏夹`）与 4 个模板（requirement/investigate/github-issue/github-pr）；分享链接与报告链接验证通过。嵌入页深链经网关 manifest 修复（`da1cc54`：self-hosted bundle + `/_paseo/hosts.json` + `/daemons/alicedev` 剥离代理）。剩余缺口：WebChat 不渲染带外回复（后端投递成功）、Telegram token 未授权、QQ onboarding 未做。证据：`docs/evidence/deploy-nekoringo2/`；运维：`docs/runbook.md`。
