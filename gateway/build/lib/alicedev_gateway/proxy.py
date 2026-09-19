@@ -61,9 +61,7 @@ class PaseoProxy:
     def upstream_url(self, request: web.Request) -> str:
         rel = str(request.rel_url)
         if rel == SELF_HOSTED_BASE_PATH or rel.startswith((f"{SELF_HOSTED_BASE_PATH}/", f"{SELF_HOSTED_BASE_PATH}?")):
-            rel = rel[len(SELF_HOSTED_BASE_PATH):]
-            if not rel.startswith("/"):
-                rel = f"/{rel}"
+            rel = rel[len(SELF_HOSTED_BASE_PATH):] or "/"
         return f"{self.config.paseo_upstream}{rel}"
 
     async def http(self, request: web.Request) -> web.StreamResponse:

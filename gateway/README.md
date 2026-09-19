@@ -38,6 +38,7 @@ docker run --rm --env-file deploy/dev/gateway.env \
 - `POST /internal/tokens` 只接受 `X-Alicedev-Token`，并验证 `/h/<server>/workspace/<workspace>?open=agent%3A<agent>&embed=1` 目标。token 存在单进程内存表，最长 6 小时；`GET /t/<token>` 通过无 `await` 的 `dict.pop` 消费，设置 `alicedev_s`（`iat`、`exp`、`sub`）HMAC cookie，然后 `302` 到状态页。cookie 使用 `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`。
 - Paseo UI 除一次性入口、报告、网关静态资源和 health 外都需要有效 cookie。HTTP 上游始终收到网关配置的 `Authorization: Bearer $PASEO_PASSWORD`；浏览器传来的 Authorization/Cookie 不会转发。
 - WebSocket 由网关分别完成浏览器和上游握手。上游收到 `Authorization`、`Host: $PUBLIC_HOST`、`Origin: https://$PUBLIC_HOST` 与 `paseo.bearer.$PASEO_PASSWORD`；浏览器不会收到该子协议或密码。
+- Paseo web bundle以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（HTTPS/443 下唯一可用的同源模式）。网关提供 `GET /_paseo/hosts.json` → `[{"id":"alicedev","label":"alicedev","basePath":"/daemons/alicedev"}]`（需 cookie），并把 `/daemons/alicedev/*` 去掉前缀后转发到 Paseo（浏览器实际拨号 `wss://$PUBLIC_HOST/daemons/alicedev/ws`）。
 - 报告只允许 `r_[a-z2-7]{26}`、单段 basename 和白名单扩展名。Markdown 使用 `html=False`、table/strikethrough/footnote/tasklists/deflist/front_matter/texmath、Pygments 及 `securityLevel: 'strict'` 的 Mermaid。响应带 `X-Robots-Tag: noindex` 与 `Referrer-Policy: no-referrer`，不提供目录列表。
 - access log 只记录方法、脱敏路径、状态与耗时：`/t/<token>` 记为 `/t/***`，不会记录请求 query、header 或 cookie。
 
