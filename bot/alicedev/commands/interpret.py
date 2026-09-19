@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger("alicedev.commands.interpret")
 
 
-async def _handle_interpret(ctx: "CommandContext") -> None:
+async def handle_interpret(ctx: "CommandContext") -> None:
     text = ctx.args.strip()
     if not text:
         await ctx.reply_text("用法：/解读 <GitHub Issue/PR URL 或 #n>")
@@ -53,7 +53,7 @@ async def _handle_interpret(ctx: "CommandContext") -> None:
         return
 
     vars = _template_vars(ctx, item)
-    record = await ctx.services.sessions.create_and_inject(
+    creation = await ctx.services.sessions.create_and_inject(
         chat_key=ctx.chat_key,
         template=template,
         vars=vars,
@@ -61,7 +61,9 @@ async def _handle_interpret(ctx: "CommandContext") -> None:
         platform_message_id=ctx.event.message_obj.message_id,
         sender_key=ctx.user_key,
     )
-    await ctx.reply_text(f"已创建 {record.session_ref}")
+    if not creation.created:
+        return
+    await ctx.reply_text(f"当前会话：「{creation.record.name}」")
 
 
 def _template_vars(ctx: "CommandContext", item: "GithubItem") -> TemplateVars:
@@ -108,6 +110,6 @@ def register(registry: "CommandRegistry", services: "Services") -> None:
             aliases=("interpret",),
             description="预取并解读 GitHub Issue 或 Pull Request",
             admin_only=False,
-            handler=_handle_interpret,
+            handler=handle_interpret,
         )
     )

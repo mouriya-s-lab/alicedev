@@ -23,6 +23,14 @@ if TYPE_CHECKING:
 
 _SESSION_RE = re.compile(r"^(s_[a-z2-7]{10})\b\s*(.*)$", re.S)
 
+_SESSION_TOKEN = re.compile(r"s_[a-z2-7]{10}")
+
+
+def _safe_error(exc: BaseException) -> str:
+    """Keep actor diagnostics useful without exposing the internal session ref."""
+    detail = _SESSION_TOKEN.sub("该会话", str(exc)).strip()
+    return detail or "内部错误，请稍后再试。"
+
 
 async def _resolve_session(ctx: "CommandContext") -> tuple[str | None, str, str | None]:
     """Return ``(session_ref, follow_up_text, error)``.
@@ -64,13 +72,13 @@ async def _handle_continue(ctx: "CommandContext") -> None:
         "SELECT chat_key, status FROM sessions WHERE session_ref = ?", (session_ref,)
     )
     if row is None:
-        await ctx.reply_text(f"未找到会话 {session_ref}。")
+        await ctx.reply_text("未找到这个会话。")
         return
     if row[0] != ctx.chat_key:
         await ctx.reply_text("该会话不属于本群。")
         return
     if row[1] == "archived":
-        await ctx.reply_text(f"会话 {session_ref} 已归档，无法继续。")
+        await ctx.reply_text("该会话已归档，无法继续。")
         return
 
     wrapped = (
@@ -83,15 +91,14 @@ async def _handle_continue(ctx: "CommandContext") -> None:
             text=wrapped,
             platform_message_id=ctx.event.message_obj.message_id,
             sender_key=ctx.user_key,
+            select_current=True,
         )
     except InjectBusyTimeout:
         await ctx.reply_text("AI 仍在处理，稍后再试。")
         return
     except SessionActorError as exc:
-        await ctx.reply_text(f"继续失败：{exc}")
+        await ctx.reply_text(f"继续失败：{_safe_error(exc)}")
         return
-
-    await ctx.reply_text(f"已转达至 {session_ref}")
 
 
 def register(registry: "CommandRegistry", services: "Services") -> None:

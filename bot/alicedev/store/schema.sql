@@ -3,13 +3,19 @@
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER NOT NULL,
-    applied_at  TIMESTAMP NOT NULL DEFAULT now()
+    applied_at  TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration   TEXT PRIMARY KEY,
+    applied_at  TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
     session_ref       TEXT PRIMARY KEY,
     chat_key          TEXT NOT NULL,
     template          TEXT NOT NULL,
+    name              TEXT NOT NULL,
     provider          TEXT,
     model             TEXT,
     thinking          TEXT,
@@ -18,8 +24,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     server_id         TEXT,
     status            TEXT NOT NULL,
     created_by        TEXT NOT NULL,
-    created_at        TIMESTAMP NOT NULL DEFAULT now(),
-    last_activity_at  TIMESTAMP NOT NULL DEFAULT now()
+    created_at        TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    last_activity_at  TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+);
+
+CREATE TABLE IF NOT EXISTS chat_current_sessions (
+    chat_key             TEXT PRIMARY KEY,
+    current_session_ref  TEXT NOT NULL,
+    updated_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -29,7 +41,7 @@ CREATE TABLE IF NOT EXISTS messages (
     platform_message_id  TEXT,
     sender_key           TEXT,
     text                 TEXT NOT NULL,
-    created_at           TIMESTAMP NOT NULL DEFAULT now(),
+    created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
     UNIQUE (chat_key, platform_message_id)
 );
 
@@ -40,15 +52,15 @@ CREATE TABLE IF NOT EXISTS reply_deliveries (
     payload_sha256        TEXT NOT NULL,
     state                 TEXT NOT NULL,          -- claimed | sent | failed
     platform_message_ids  JSON,
-    created_at            TIMESTAMP NOT NULL DEFAULT now(),
-    updated_at            TIMESTAMP NOT NULL DEFAULT now()
+    created_at            TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    updated_at            TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS outbound (
     platform_message_id  TEXT PRIMARY KEY,
     chat_key             TEXT NOT NULL,
     session_ref          TEXT NOT NULL,
-    created_at           TIMESTAMP NOT NULL DEFAULT now()
+    created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS requirements (
@@ -60,7 +72,7 @@ CREATE TABLE IF NOT EXISTS requirements (
     text         TEXT NOT NULL,
     images       JSON,
     status       TEXT NOT NULL DEFAULT 'open',
-    created_at   TIMESTAMP NOT NULL DEFAULT now()
+    created_at   TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS favorites (
@@ -73,7 +85,7 @@ CREATE TABLE IF NOT EXISTS favorites (
     text                 TEXT NOT NULL,
     images               JSON,
     platform_message_id  TEXT,
-    created_at           TIMESTAMP NOT NULL DEFAULT now()
+    created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS reports (
@@ -81,7 +93,7 @@ CREATE TABLE IF NOT EXISTS reports (
     session_ref     TEXT,
     source_path     TEXT NOT NULL,
     published_path  TEXT NOT NULL,
-    created_at      TIMESTAMP NOT NULL DEFAULT now()
+    created_at      TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS tokens_issued (
@@ -90,7 +102,7 @@ CREATE TABLE IF NOT EXISTS tokens_issued (
     user_key     TEXT NOT NULL,
     issued_by    TEXT NOT NULL,
     target       TEXT NOT NULL,
-    issued_at    TIMESTAMP NOT NULL DEFAULT now(),
+    issued_at    TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
     expires_at   TIMESTAMP
 );
 

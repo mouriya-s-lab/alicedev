@@ -63,8 +63,8 @@ class IdleSweeper:
         idle = await self._sessions.idle_active(cutoff)
         closed = 0
         for record in idle:
-            await self._actor.close(record.session_ref)
-            closed += 1
+            if await self._actor.close(record.session_ref, older_than=cutoff):
+                closed += 1
         if closed:
             _LOG.info("sweeper closed %d idle session(s)", closed)
         return closed

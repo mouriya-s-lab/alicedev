@@ -32,6 +32,10 @@ services:
     platform: linux/amd64
     container_name: alicedev-astrbot-init
     restart: "no"
+    environment:
+      # The rendered cmd_config carries this token; require it before any
+      # `up` so a missing token cannot silently disable reverse WS auth.
+      NAPCAT_ONEBOT_TOKEN: ${NAPCAT_ONEBOT_TOKEN:?set NAPCAT_ONEBOT_TOKEN}
     command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/cmd_config.json /data/cmd_config.json && cp /seed/alicedev_config.json /data/config/alicedev_config.json"]
     volumes:
       - astrbot_data:/data
@@ -124,13 +128,37 @@ services:
         condition: service_healthy
       astrbot-init:
         condition: service_completed_successfully
-    expose: ["6200"]
+    expose: ["6199", "6200"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3); raise SystemExit(0 if r.status == 200 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 10
       start_period: 45s
+
+  napcat:
+    # v4.18.28 amd64 manifest; keep the tag and digest together.
+    image: mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee
+    platform: linux/amd64
+    container_name: alicedev-napcat
+    restart: unless-stopped
+    # CPU-only: the image uses its virtual display and has no GPU devices.
+    environment:
+      NAPCAT_UID: ${NAPCAT_UID:-1000}
+      NAPCAT_GID: ${NAPCAT_GID:-1000}
+      MODE: astrbot
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:6099:6099"
+    volumes:
+      - napcat_qq:/app/.config/QQ
+      - napcat_config:/app/napcat/config
+      - napcat_plugins:/app/napcat/plugins
+    # Internal carries reverse WS; edge is only for QQ's outbound access.
+    networks: [internal, edge]
+    depends_on:
+      astrbot:
+        condition: service_healthy
 
   t2i:
     image: soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e
@@ -189,6 +217,12 @@ networks:
 volumes:
   astrbot_data:
     name: alicedev_astrbot_data
+  napcat_qq:
+    name: alicedev_napcat_qq
+  napcat_config:
+    name: alicedev_napcat_config
+  napcat_plugins:
+    name: alicedev_napcat_plugins
   paseo_home:
     name: alicedev_paseo_home
   workspace:

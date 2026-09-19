@@ -10,6 +10,7 @@ dist/
 
 # deploy
 deploy/.env
+deploy/astrbot/*.rendered.json
 
 # dev stack runtime + local secrets
 deploy/dev/astrbot-data/

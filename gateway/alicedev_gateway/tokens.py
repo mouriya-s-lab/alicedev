@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import base64
 import hashlib
 import hmac
+import math
 import json
 import re
 import secrets
@@ -41,9 +42,10 @@ class IssuedToken:
 class TokenTable:
     """An event-loop-local, single-consumer token table.
 
-    ``consume`` deliberately performs ``dict.pop`` and expiry checking without an
-    await.  That makes concurrent aiohttp handlers race on one atomic event-loop
-    section: only one request can obtain a record.
+    ``peek`` and ``consume`` deliberately perform their lookup, expiry check,
+    and optional deletion without an await.  That keeps preview requests
+    non-consuming while concurrent POST handlers still race on one atomic
+    event-loop section: only one request can obtain a record via ``consume``.
     """
 
     def __init__(self) -> None:
@@ -90,6 +92,21 @@ class TokenTable:
             expires_at=expires_at,
         )
 
+    def peek(self, token: str, *, now: float | None = None) -> TokenRecord | None:
+        """Return a live record without consuming it.
+
+        Expired records are removed opportunistically, using the same
+        event-loop-local critical section and expiry boundary as ``consume``.
+        """
+        record = self._records.get(token)
+        if record is None:
+            return None
+        current = time.time() if now is None else now
+        if record.expires_at <= current:
+            self._records.pop(token, None)
+            return None
+        return record
+
     def consume(self, token: str, *, now: float | None = None) -> TokenRecord | None:
         record = self._records.pop(token, None)
         if record is None:
@@ -116,8 +133,10 @@ def _coerce_ttl(value: int | float) -> int:
     if isinstance(value, bool):
         raise ValueError("ttl_s must be a positive number")
     try:
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("ttl_s must be a positive number")
         ttl = int(value)
-    except (TypeError, ValueError) as exc:
+    except (OverflowError, TypeError, ValueError) as exc:
         raise ValueError("ttl_s must be a positive number") from exc
     if ttl <= 0:
         raise ValueError("ttl_s must be a positive number")

@@ -17,8 +17,8 @@ reply:
 ---
 你是 alicedev 社区（维护 OpenAlice 项目）的开发助理。下面是一位群友在群里提出的**需求**，请认真分析并给出回应。
 
+会话名称：{{ session_name }}
 会话标识：{{ session_ref }}
-来自群聊：{{ chat.name }}
 提出人：{{ sender.name }}
 
 需求原文：

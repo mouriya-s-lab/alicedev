@@ -10,12 +10,15 @@ AstrBot 插件把群聊指令变成 paseo 会话，paseo 里的 omp 通过 `alic
 
 ```mermaid
 flowchart LR
-  QQ[QQ / Telegram / WebChat] -->|平台适配器| astr
+  QQ[个人 QQ 账号] -->|NTQQ 客户端| nap
+  TG[Telegram / WebChat] -->|平台适配器| astr
   subgraph host[nekoringo2]
     caddy[caddy · TLS :443] --> gw[gateway · aiohttp :8080]
     gw -->|cookie 校验后反代 http+ws| paseo
     gw -->|GET /v1/status| astr
-    astr[astrbot + alicedev 插件<br/>DuckDB 唯一写者 · 内部 API :6200]
+    nap[NapCat · QQNT/Xvfb<br/>CPU-only · WebUI :6099 loopback]
+    nap -->|OneBot v11 reverse WS<br/>ws://astrbot:6199/ws| astr
+    astr[astrbot + alicedev 插件<br/>DuckDB 唯一写者 · API :6200 · aiocqhttp :6199]
     astr -->|HTTP /mcp/agents 或 WS /ws| paseo[paseo daemon :6767<br/>Arch 镜像 · omp · alicedev 扩展 · alicedev-reply]
     paseo -->|alicedev-reply → POST /v1/reply| astr
     astr -->|html_render| t2i[t2i :8999]
@@ -26,6 +29,7 @@ flowchart LR
 | 进程 | 语言 | 职责 |
 |---|---|---|
 | `astrbot` + 插件 `bot/` | Python 3.11 | 指令、模板、需求/收藏、会话状态机、12h 空闲关闭、渲染、内部 API、GitHub 预取、报告发布 |
+| `napcat` | QQNT / Xvfb | 个人 QQ 的生产协议端和 OneBot v11 reverse-WS 客户端；CPU-only，QQ/config/plugins 均在命名卷中，6099 只绑定宿主机 loopback |
 | `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入）、报告 md 渲染、状态页 |
 | `paseo`（fork `paseo-alicedev`） | TS | agent 运行时；fork 只做 embed 模式 + Arch 镜像 |
 | `harness/omp-extension` | TS | `/chat_ingress` 命令、`chat_reply` 工具、`session_stop` 提醒 |
@@ -35,6 +39,11 @@ flowchart LR
 **单写者**：只有 AstrBot 插件进程打开 `alicedev.duckdb`；所有存储变更经 `Store` 的单个 `asyncio.Lock`。其他进程通过 bot 内部 HTTP API。**没有** paseo 侧 sidecar，没有 TS bridge 服务。
 
 **内部 API 传输**：docker 网络 HTTP + 头 `X-Alicedev-Token`，不映射主机端口（HANDOFF §9 的 unix socket 默认据此更新）。
+
+**QQ 生产链路**：NapCat 是本项目必需的个人 QQ 协议端，加入 `internal`（反向 WS）和
+`edge`（QQ 登录/消息出站）网络；AstrBot 在容器内监听 `0.0.0.0:6199`，宿主机不发布
+6199。NapCat 的 WebUI 只通过 `127.0.0.1:6099` 和 SSH tunnel 管理。QQ 登录密码只在
+隧道后的 WebUI 输入，不进入 Compose、`.env` 或仓库；设备身份和 WebUI 配置由命名卷持久化。
 
 ## 2. 标识符
 
@@ -171,8 +180,14 @@ bot 持久化解析后的实际值到 `sessions(provider, model, thinking)`。
 
 **威胁模型（明确决定）**：分享链接的接收者是社区内受信开发者。token 门槛阻止外部人进入；一旦持有 cookie，即可使用整个 paseo daemon UI（embed 只是 UX 收敛，不是授权边界）。报告是公开 bearer URL（128 bit id），因为它们被贴进群供多人反复打开。
 
-- `GET /t/<token>`：单进程 `dict.pop` 原子消费 → 302 `/_alicedev/?go=<urlencoded target>`，设 cookie `alicedev_s=<b64url(json{iat,exp,sub})>.<hmac-sha256>`；`Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`；服务端校验 `exp`，常量时间比较 HMAC。
-- token 表：内存 `{token:{target,user_key,expires_at}}`，`ttl_s` 上限 21600（6h），后台清理；重启即失效（runbook 记录）。`POST /internal/tokens {target, user_key, ttl_s?}` → `{token,url}`。`target` 必须匹配 `^/h/[^/]+/workspace/[^/?]+\?open=agent%3A[^&]+$`（bot 追加 `&embed=1`）。
+- `GET /t/<token>` 与 `HEAD /t/<token>`：单进程校验 token 并 `peek`，**不消费**；
+  返回 preview landing（`Cache-Control: no-store`、`Referrer-Policy: no-referrer`、
+  `X-Robots-Tag: noindex`）。GET 页面用 JavaScript 自动向同一路径提交 `POST`，
+  同时保留可见按钮 fallback；HEAD 只返回 headers，不消费 token。
+- `POST /t/<token>`：无 `await` 的单进程原子 consume；成功设 cookie
+  `alicedev_s=<b64url(json{iat,exp,sub})>.<hmac-sha256>` 并返回 `303 See Other`
+  到 `/_alicedev/?go=<urlencoded target>`；`Path=/; Secure; HttpOnly; SameSite=Lax;
+  Max-Age=2592000`；服务端校验 `exp`，常量时间比较 HMAC。无效/已消费/过期返回 403。
 - cookie 校验：除 `/t/*`、`/_alicedev/r/*`、`/_alicedev/static/*`、`/_alicedev/health` 外全部要求合法 cookie；失败 → 403 页面。
 - `/_alicedev/`：状态页（取 bot `/v1/status`），显示 bot 状态、命令、模板列表与「进入会话」按钮（`go`）。
 - `/_alicedev/r/<report_id>/<basename>`：只读挂载 `REPORTS_ROOT/_published`；`report_id` 正则 `^r_[a-z2-7]{26}$`，`basename` 不含 `/`、`..`；`.md` → markdown-it-py（`html=False`）+ mdit-py-plugins（table、strikethrough、footnote、tasklists、deflist、front_matter、texmath）+ pygments；mermaid 客户端渲染（自带静态 js，`securityLevel:"strict"`）；其他扩展名白名单直出。响应头 `X-Robots-Tag: noindex`，`Referrer-Policy: no-referrer`；无目录列表。
@@ -200,7 +215,7 @@ bot 持久化解析后的实际值到 `sessions(provider, model, thinking)`。
 | `/链接 [s_ref] [@A @B …]` | 管理员 | 每个 @ 用户一个 token（`user_key` 记入）；无 @ 给发起人；无 s_ref 取本群最近 active 会话；逐条 `[At, Plain(url)]` |
 | `/解读 <url|#n>`；或消息仅含 issue/PR 链接 | 所有人 | REST 预取（`github_token` 可选）→ 模板 `github-issue`/`github-pr` |
 | `/归档 <s_ref>` | 管理员 | archive + `archived` |
-| `/alicedev` | 所有人 | 文本帮助 |
+| `/alicedev` | 所有人 | 通过 `CardRenderer` 发送图片帮助卡，包含当前会话名称/状态与常用命令、路由说明；渲染失败时才回退为文本帮助 |
 
 分发：单个 `@filter.regex(r"^[/／]")` 入口 + `CommandRegistry`；模板指令由 `TemplateRegistry` 在 `initialize()` 注册。
 
@@ -221,12 +236,13 @@ tokens_issued(token_id PK, session_ref, user_key, issued_by, target, issued_at, 
 
 ## 12. 部署（`deploy/`）
 
-- `docker-compose.yml`：caddy、gateway、astrbot、t2i、paseo；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`GITHUB_TOKEN?`。
-- 卷：`astrbot_data`；`paseo_home`（含 omp 配置，用户自管）；`workspace`；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `/srv/alicedev/reports/_published` ro）。
+- `docker-compose.yml`：caddy、gateway、astrbot、**napcat**、t2i、paseo；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`NAPCAT_ONEBOT_TOKEN`、`GITHUB_TOKEN?`。
+- 卷：`astrbot_data`；`napcat_qq`、`napcat_config`、`napcat_plugins`（NapCat 运行身份、配置和插件）；`paseo_home`（含 omp 配置，用户自管）；`workspace`；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `/srv/alicedev/reports/_published` ro）。
+- NapCat 镜像固定为 `mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee`（`linux/amd64`、CPU-only）；只绑定宿主机 `127.0.0.1:6099`，不发布 `6199`。
 - paseo 镜像在 nekoringo2 由 compose `build` 从 `paseo-alicedev` 检出构建；harness 产物由 alicedev 仓库 `make harness` 生成后作为 build context 传入。
-- AstrBot 插件 bind mount `./bot` → `/AstrBot/data/plugins/alicedev`；`cmd_config.json` 预置 `telegram` + `webchat` + `t2i_endpoint=http://t2i:8999`。
+- AstrBot 插件 bind mount `./bot` → `/AstrBot/data/plugins/alicedev`；`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`、`${NAPCAT_ONEBOT_TOKEN}`）+ `t2i_endpoint=http://t2i:8999`。
 - DNS：`alicedev.237575.xyz` A 已手工建（HANDOFF §7）；runbook 记录迁入 `pve-vctcn/apps/dns` 的后续 issue。
-- QQ：runbook 记录 `qq_official` 的开放平台审核 / IP 白名单 / 群添加前置条件，NapCat fallback 的 compose 片段与风险（`docs/research/qq-protocol.md`）。
+- QQ 生产 onboarding 采用操作员选定的 NapCat WebUI 密码登录；密码、新设备验证和后续重连按 `docs/runbook.md` §7 执行，当前文档不声称登录已完成。
 
 ## 13. 仓库布局
 

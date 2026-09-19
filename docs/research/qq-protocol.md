@@ -2,18 +2,20 @@
 
 > 研究快照：2026-09-19；GitHub/文档页面主要显示到 2026-09-18。目标是“开发者社区群机器人尽量长期在线”，不是规避 QQ 的风控或封禁。QQ 的风控、设备识别和策略会变化；任何非官方个人账号协议端都不能承诺不掉线/不封号。
 >
-> **结论先行：** 若能接受 QQ 开放平台的群机器人审核、权限和消息范围，首选 **QQ 官方机器人 API + AstrBot 的 `qq_official` 适配器**：没有个人 QQ 账号登录、NTQQ 注入或第三方签名服务器，账号被踢/封的风险模型完全不同。若必须使用普通个人 QQ 号、必须接 OneBot v11/`aiocqhttp`，则选择 **NapCat（NTQQ/Linux QQ）作为“最少额外迁移成本”的条件性 fallback**，并用持久化设备数据、保守发送、监控和人工介入；这不是安全保证。
+> **本项目生产决定：** 操作员明确选择个人 QQ 账号 + OneBot v11/`aiocqhttp`，因此 alicedev
+> 生产固定采用 **NapCat（NTQQ/Linux QQ）+ AstrBot reverse WebSocket**。NapCat 是必需
+> 生产组件，不是 fallback；QQ 官方 Bot API 的事实仍保留在本研究作历史候选对比，但不
+> 是本项目的生产 onboarding。该决定来自操作员约束，不是对 NapCat 风险的安全保证。
 
 ## 1. 候选事实
 
 ### 1.1 NapCat（NapNeko/NapCatQQ）
 
 | 项目 | 事实与判断 |
-|---|---|
+| Docker / 镜像 | 上游 Docker 仓库为 [`NapNeko/NapCat-Docker`](https://github.com/NapNeko/NapCat-Docker)，生产固定 `mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee`（Docker Hub `linux/amd64` manifest；支持 amd64/arm64）。数据目录 `/app/.config/QQ`、配置 `/app/napcat/config`、插件 `/app/napcat/plugins` 使用命名卷；生产不得使用 `latest`。 |
 | 维护状态（日期） | `NapNeko/NapCatQQ` 未归档，仓库页面 2026-09-18 仍更新；最新 release **v4.18.28，2026-09-14**。上游 README 将其描述为基于 NTQQ 的现代 Bot 协议端，并声明持续维护（维护声明不是在线/封禁保证）。[NapCat README](https://github.com/NapNeko/NapCatQQ) · [releases](https://github.com/NapNeko/NapCatQQ/releases) |
 | 协议基础 | **NTQQ / Linux QQ 客户端**：NapCat README 明确写 “based on NTQQ”；Linux Docker 镜像运行 QQNT，并通过 NapCat 注入/适配提供 Bot API。它不是重新实现 Mirai/Android 协议。 |
-| Docker / 镜像 | 上游 Docker 仓库为 [`NapNeko/NapCat-Docker`](https://github.com/NapNeko/NapCat-Docker)，其 Compose 使用 `mlikiowa/napcat-docker:latest`，支持 Linux amd64/arm64，数据目录 `/app/.config/QQ`、配置 `/app/napcat/config`。这是与上游仓库配套的 Docker Hub 镜像，但镜像命名空间不是 `NapNeko`；生产环境应在拉取后记录 digest，不应盲信 `latest`。 |
-| 登录 | WebUI 默认 `:6099/webui` 扫码/快速登录；当前后端也暴露 QR、密码 MD5、验证码和新设备验证流程（密码登录可能被 QQ 要求验证码/新设备确认）。首次扫码后持久化 QQ 数据可支持快速登录；不要把 QQ 明文密码写入 Compose。证据：[NapCat-Docker README](https://github.com/NapNeko/NapCat-Docker) · [QQLogin.ts](https://github.com/NapNeko/NapCatQQ/blob/main/packages/napcat-webui-backend/src/api/QQLogin.ts) |
+| 登录 | WebUI 默认 `:6099/webui`，支持扫码/快速登录、密码、验证码和新设备验证；本项目生产流程选择 WebUI 密码登录。首次登录成功后持久化 QQ 数据可支持快速登录；不要把 QQ 明文密码写入 Compose。证据：[NapCat-Docker README](https://github.com/NapNeko/NapCat-Docker) · [QQLogin.ts](https://github.com/NapNeko/NapCatQQ/blob/main/packages/napcat-webui-backend/src/api/QQLogin.ts) |
 | 外部 sign server | 标准 NapCat Docker/NTQQ 路径**没有上游文档要求配置 qsign/外部 sign server**；不要把 NapCat 的 OneBot access token、WebUI token 与 QQ 协议签名混淆。当前仓库代码搜索未发现 `qsign` 配置；这只能证明“当前公开配置路径未见该依赖”，不能证明未来 QQ 版本永远不需要额外服务。 |
 | OneBot v11 / AstrBot | 支持 OneBot v11，且 AstrBot 官方 `aiocqhttp` 文档直接列 NapCat 并要求 **反向 WebSocket**；AstrBot 作 server，NapCat 作 client，URL 约定 `ws(s)://<host>:6199/ws`。[AstrBot aiocqhttp docs](https://github.com/AstrBotDevs/AstrBot/blob/master/docs/en/platform/aiocqhttp.md) |
 | 资源 / GPU | 上游没有正式 CPU/RAM 最低值。Linux Docker 通过虚拟显示（Xvfb/Xorg）运行 Electron/QQ；官方安装说明使用 `xvfb-run`，没有 `/dev/dri`、NVIDIA、VA-API 或 SR-IOV 要求。[NapCat Linux 启动说明](https://napneko.github.io/guide/boot/Shell-Linux-SemiAuto) · [Docker repo](https://github.com/NapNeko/NapCat-Docker) 。**[INFERENCE]** 单账号可先按 2 vCPU、2–4 GiB RAM 预算并实测，GPU 不应作为稳定性措施；iGPU 可能只改变 Electron 渲染 CPU 占用，不会降低 QQ 风控概率。 |
@@ -66,7 +68,7 @@
 
 **go-cqhttp 风险判断：** 不应作为 2026 新部署方案；低内存和成熟 OneBot 生态不能弥补无维护、旧协议和 sign-server 依赖。
 
-### 1.5 QQ 官方机器人 API（QQ 开放平台）
+### 1.5 历史候选：QQ 官方机器人 API（QQ 开放平台）
 
 | 项目 | 事实与判断 |
 |---|---|
@@ -75,31 +77,39 @@
 | Docker / 镜像 | 腾讯 SDK 仓库没有官方运行时 Docker 镜像；通常在自己的 Node/Python 镜像中安装 SDK。对本项目无需额外 SDK 容器：AstrBot 自带 `qq_official` 适配器，直接运行 `soulter/astrbot:latest` 或自建 AstrBot 镜像即可。 |
 | 登录 | 没有“QQ 个人账号 QR/密码登录”。AstrBot 官方 QQ Bot 文档支持 **One-click QR setup**：手机 QQ 扫码绑定开放平台凭据；也可在开放平台拿 AppID/AppSecret。这个 QR 是 Bot 应用绑定，不是把个人 QQ 登录到服务器。 |
 | 外部 sign server | **不需要**。使用官方 access token/Gateway；没有 qsign/NTQQ 签名服务。 |
-| OneBot v11 / AstrBot | 不走 OneBot v11/`aiocqhttp`，直接选择 AstrBot 的 `qq_official` 平台适配器。AstrBot 文档推荐该路径，理由是官方提供、稳定且支持扫码初始化。 |
+| OneBot v11 / AstrBot | 不走 OneBot v11/`aiocqhttp`，直接选择 AstrBot 的 `qq_official` 平台适配器。该候选是官方 API 事实，不是本项目的生产路径；本项目受个人 QQ + OneBot 操作员约束选择 NapCat。 |
 | 资源 / GPU | 只运行官方 API WebSocket/Webhook 客户端和 AstrBot；无 QQ Electron/Xvfb，官方 SDK 为 Node/Python 网络客户端，**不需要 GPU**。官方未给最低 CPU/RAM；额外进程开销应远小于完整 Linux QQ 客户端（这是工程常识级 [INFERENCE]，应在目标镜像中实测）。 |
 | 风险 | 没有个人 QQ 客户端被踢/设备风控这条风险链；风险转为 App 审核、IP 白名单、权限、群范围、官方频控、内容合规和平台停用。官方文档要求开放平台创建/审核/上线、IP 白名单；群主动消息有频控（以当前官方 API 页面为准）。这不是“任何内容都不会被限制”的保证，而是官方账号模型。 |
 | 能力边界 | 需要群主/管理员添加机器人，且受沙箱/审核/白名单约束；群消息通常需要在后台开启相应访问范围，普通 QQ 号、历史 QQ 群号、任意私聊能力不能照搬 OneBot。若需求只需开发者社区群中 @机器人/回复/主动通知，这些限制通常可接受。 |
 
 官方入口：[QQ Bot 文档](https://bot.q.qq.com/wiki/) · [API v2](https://bot.q.qq.com/wiki/develop/api-v2/) · [AstrBot QQ WebSocket](https://github.com/AstrBotDevs/AstrBot/blob/master/docs/en/platform/qqofficial/websockets.md) · [AstrBot 当前文档说明 `appid`/`secret`](https://docs-v4.astrbot.app/en/platform/qqofficial/websockets.html)
 
-## 2. 比较表与推荐
+## 2. 比较表与决定
 
-### 2.1 快速比较
+### 2.1 快速比较（历史事实，不等于本项目生产推荐）
 
 | 候选 | 维护（截至快照） | 协议/账号 | Docker | QR/密码 | 外部 sign server | OneBot v11 / AstrBot | GPU | 风险结论 |
 |---|---|---|---|---|---|---|---|---|
-| **QQ 官方 Bot API** | 官方平台；Node SDK 1.0.4 (2026-07-31) | 官方 Bot 应用 | 无官方运行时镜像；自建 SDK 镜像或 AstrBot 镜像 | Bot 绑定 QR；非个人 QQ 密码 | 否 | 不走 aiocqhttp；用 `qq_official` | 否 | **首选（若接受审核/权限）**；没有个人账号踢下线链 |
-| **NapCat** | v4.18.28 (2026-09-14)，活跃 | NTQQ/Linux QQ | `mlikiowa/napcat-docker:latest`（配套社区镜像） | WebUI QR、快速登录、密码/验证码路径 | 标准路径未要求外部 qsign | **是**，AstrBot 官方有反向 WS 指引 | 不需要；Xvfb | **OneBot fallback 首选**；2026 有反复风控/踢线报告 |
-| **LLBot** | v8.2.1 (2026-09-15)，活跃 | 直连协议或 PMHQ/真实 QQ | `linyuchen/llbot`; PMHQ `linyuchen/pmhq` | WebUI/CLI QR、快速登录 | bundled sign-proxy；PMHQ 另有 auth token 可能 | **是** | 不需要；PMHQ Xvfb/software rendering | PMHQ 可试稳定性，但 2026 Docker 掉线 issue 仍开放 |
+| **QQ 官方 Bot API** | 官方平台；Node SDK 1.0.4 (2026-07-31) | 官方 Bot 应用 | 无官方运行时镜像；自建 SDK 镜像或 AstrBot 镜像 | Bot 绑定 QR；非个人 QQ 密码 | 否 | 不走 aiocqhttp；用 `qq_official` | 否 | 历史候选；受审核、权限和群添加约束，本项目未选用 |
+| **NapCat** | v4.18.28 (2026-09-14)，活跃 | NTQQ/Linux QQ | `mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee`（amd64 pin） | WebUI 密码/验证码、新设备验证；持久化后快速登录 | 标准路径未要求外部 qsign | **是**，AstrBot 官方有反向 WS 指引 | 不需要；Xvfb | **本项目生产选择**；仍有 2026 风控/踢线报告 |
+| **LLBot** | v8.2.1 (2026-09-15)，活跃 | 直连协议或 PMHQ/真实 QQ | `linyuchen/llbot`; PMHQ `linyuchen/pmhq` | WebUI/CLI QR、快速登录 | bundled sign-proxy；PMHQ 另有 auth token 可能 | **是** | 不需要；PMHQ Xvfb/software rendering | 不作为本项目生产端 |
 | **Lagrange.OneBot** | V1 sunset；Core V2 nightly (2026-08-02) | NTQQ 纯 C#；V2 方向 Milky | legacy GHCR `ghcr.io/lagrangedev/lagrange.onebot:edge` | V1 以 QR 为主；密码不应依赖 | **通常需要匹配 NTQQ SignServer** | V1 是；V2/Milky 不是 aiocqhttp | 否 | 不建议新 AstrBot 长期部署；V1/签名服务维护面大 |
 | **go-cqhttp** | v1.2.0 (2023-10-09)，停止维护 | Mirai/MiraiGo 逆向协议 | `ghcr.io/mrs4s/go-cqhttp:1.2.0` | QR 或密码 | 常需要 qsign/sign server | **是** | 否 | **排除**：过时、维护者要求迁移 |
 
 ### 2.2 给 alicedev 的决定
 
-1. **默认方案：QQ 官方 Bot API + AstrBot `qq_official`。** 目标是开发者社区群，不是兼容任意个人号；官方路径最直接地满足“尽量不因协议端被踢/封”。在开放平台申请/审核、配置 IP 白名单、让群主添加 Bot，并开启需要的群消息范围。
-2. **Fallback：若业务必须使用个人 QQ 或目标群无法添加官方 Bot，选 NapCat Docker + AstrBot reverse WS。** 它是 AstrBot 文档直接覆盖的 NTQQ/OneBot 方案，迁移成本低于自接 Lagrange V2/Milky。必须把“个人账号有非零风控风险”写入运行手册和账号预算；推荐先单账号低频运行，不把 iGPU 作为风控解决方案。
-3. **LLBot PMHQ 仅作为第二个实验分支。** 若 NapCat 的具体 QQNT/环境组合掉线，可在隔离账号上比较 LLBot PMHQ；不要同时运行同一 QQ 的 NapCat、LLBot、Lagrange 或官方 QQ 客户端来“测试稳定性”，否则会产生互踢/设备信号。
-4. **不选 Lagrange.OneBot V1 作为新长期基线，不选 go-cqhttp。** 前者 OneBot 路线 sunset 且依赖匹配签名；后者维护者明确宣布无法继续维护。
+1. **生产必需组件：NapCat Docker + AstrBot `aiocqhttp` reverse WS。** 操作员约束
+   要求个人 QQ 和 OneBot v11；因此不走 QQ 官方 Bot 的审核/群添加 onboarding。
+   这是本项目的部署决定，不是对 NapCat 在线率、封禁风险或长期兼容性的保证。
+2. Compose 固定 `linux/amd64` 的 NapCat `v4.18.28` tag+digest，CPU-only；QQ、
+   NapCat config 和 plugins 使用命名卷。WebUI 只绑定 `127.0.0.1:6099`，AstrBot
+   在容器内监听 `0.0.0.0:6199`，NapCat 主动连接 `ws://astrbot:6199/ws`，宿主机
+   不发布 6199。
+3. OneBot token 由部署 operator 生成并存入已有 `deploy/.env` 的
+   `NAPCAT_ONEBOT_TOKEN`；渲染后 AstrBot 使用同一 token，NapCat WebUI 手动保存
+   同值。QQ 密码和 NapCat WebUI access token 不进入 Compose、`.env` 或仓库。
+4. LLBot、Lagrange.OneBot、go-cqhttp 不属于此生产路径。不要用同一 QQ 并行启动
+   多个协议端或桌面 QQ；比较稳定性必须另用账号和隔离持久化数据。
 
 ### 2.3 证据冲突与不确定性
 
@@ -110,142 +120,78 @@
 
 ## 3. Compose 与 AstrBot 配置
 
-### 3.1 首选官方 API：只需 AstrBot（无 QQ 协议容器）
+### 3.1 历史对比：QQ 官方 API（不作为 alicedev 生产路径）
 
-官方 API 不需要 NapCat/Lagrange/go-cqhttp 容器，也没有反向 WS 端口。下面是部署形态；`QQ_OFFICIAL_APPID`/`QQ_OFFICIAL_SECRET` 仅作为 secret 注入占位，**当前 AstrBot 最可靠的配置入口是 WebUI/平台配置，不应假设任意环境变量会自动写入平台配置**：
+QQ 官方 API 是独立的官方 Bot 应用模型，不登录个人 QQ，也不需要 NapCat 或
+OneBot reverse WS；它需要开放平台审核、IP/权限配置和群管理员添加。上述事实保留
+在 §1.5 供选型追溯，但操作员已经选择个人 QQ + OneBot，故本项目不执行官方 API
+onboarding，不在生产 Compose 或 `.env.example` 中配置 `qq_official`。
 
-```yaml
-services:
-  astrbot:
-    image: soulter/astrbot:latest
-    container_name: astrbot
-    restart: unless-stopped
-    init: true
-    environment:
-      TZ: Asia/Shanghai
-      # 仅供部署系统/人工配置时使用；不要提交真实值。
-      QQ_OFFICIAL_APPID: ${QQ_OFFICIAL_APPID:?set in secret store}
-      QQ_OFFICIAL_SECRET: ${QQ_OFFICIAL_SECRET:?set in secret store}
-    ports:
-      - "127.0.0.1:6185:6185"
-    volumes:
-      - ./astrbot-data:/AstrBot/data
-```
+### 3.2 生产 Compose：NapCat + AstrBot reverse WebSocket
 
-在 AstrBot WebUI 的 Platforms/Bots → Add Adapter → **QQ Official Bot (WebSocket)** 配置：
+生产声明位于 [`deploy/docker-compose.yml`](../../deploy/docker-compose.yml)，不在本
+研究文档维护第二份可复制的 Compose。关键契约如下：
 
-```json
-{
-  "id": "qq_official",
-  "type": "qq_official",
-  "enable": true,
-  "appid": "<从 QQ 开放平台或一键 QR 绑定得到>",
-  "secret": "<从 QQ 开放平台得到>",
-  "enable_group_c2c": true,
-  "enable_guild_direct_message": false
-}
-```
+- NapCat 镜像固定为
+  `mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee`；
+  这是 Docker Hub 的 `linux/amd64` manifest，Compose 另声明 `platform: linux/amd64`。
+  不使用 `latest`，不添加 GPU device、runtime 或 reservation。
+- NapCat 连接 `internal` 以访问 AstrBot，并连接 `edge` 访问 QQ 出站服务。宿主机
+  仅绑定 `127.0.0.1:6099:6099` 供 WebUI；AstrBot 的 6199 只在 Compose 网络
+  `expose`，没有任何 host `ports` 映射。
+- QQ 身份、NapCat 配置和插件分别挂载命名卷
+  `napcat_qq` → `/app/.config/QQ`、`napcat_config` → `/app/napcat/config`、
+  `napcat_plugins` → `/app/napcat/plugins`。禁止改成 `./napcat/*` 工作树 bind
+  mount，否则源码 `rsync --delete` 可能破坏运行时身份。
+- `deploy/astrbot/cmd_config.json` 预置 AstrBot server：
 
-- 更推荐 AstrBot 的 **One-click QR setup**，由手机 QQ 扫码绑定后让 AstrBot 自动填写 `appid`/`secret`；不把 secret 写入仓库。
-- 开放平台配置服务器公网 IP 白名单；发布/上线和群主添加是官方流程。
-- 该路径没有 `ws://astrbot:6199/ws`，因为 AstrBot 自己连接 QQ 官方 Gateway；不要给官方 API 额外套 OneBot。
-- 官方 Node SDK 自建容器时可用 `@tencent-connect/qqbot-nodejs`（Node >=20），但 alicedev 不需要另写 SDK bridge，除非 AstrBot 适配器无法覆盖所需 API。
-
-### 3.2 OneBot fallback：NapCat + AstrBot reverse WebSocket
-
-此 Compose 采用 [NapCat-Docker 上游 AstrBot 模板](https://github.com/NapNeko/NapCat-Docker/blob/main/compose/astrbot.yml) 的镜像、环境变量和卷路径，并把 AstrBot reverse WS 端口绑定为仅本机可访问。两个服务在同一 Compose 网络，NapCat 连接 `astrbot` 服务名，**不能在 NapCat 容器内用 `127.0.0.1` 连接 AstrBot**。
-
-```yaml
-services:
-  napcat:
-    image: mlikiowa/napcat-docker:latest
-    container_name: napcat
-    restart: always
-    environment:
-      NAPCAT_UID: "${NAPCAT_UID:-1000}"
-      NAPCAT_GID: "${NAPCAT_GID:-1000}"
-      MODE: astrbot
-      TZ: Asia/Shanghai
-      # 可选：仅指定已有快速登录账号；不要在此写 QQ 明文密码。
-      # NAPCAT_QUICK_ACCOUNT: "<QQ号>"
-    ports:
-      - "127.0.0.1:6099:6099" # WebUI；不要直接暴露公网
-    volumes:
-      - ./napcat/qq:/app/.config/QQ
-      - ./napcat/config:/app/napcat/config
-      - ./napcat/plugins:/app/napcat/plugins
-    networks: [qqbot]
-
-  astrbot:
-    image: soulter/astrbot:latest
-    container_name: astrbot
-    restart: unless-stopped
-    environment:
-      TZ: Asia/Shanghai
-    ports:
-      - "127.0.0.1:6185:6185" # AstrBot WebUI
-      - "127.0.0.1:6199:6199" # OneBot reverse WS listener; no public exposure
-    volumes:
-      - ./astrbot-data:/AstrBot/data
-    networks: [qqbot]
-
-networks:
-  qqbot:
-    driver: bridge
-```
-
-首次运行：
-
-```bash
-NAPCAT_UID=$(id -u) NAPCAT_GID=$(id -g) docker compose up -d
-# 浏览器仅从受信网络访问 http://127.0.0.1:6099/webui（或经 SSH 隧道）完成扫码
-# docker logs napcat 可见 WebUI/token/登录状态提示
-```
-
-NapCat WebUI 中的 OneBot 11 网络配置（当前字段名可能随 NapCat 版本变化，优先用 WebUI 生成）：
-
-```json
-{
-  "network": {
-    "websocketClients": [
-      {
-        "name": "astrbot",
-        "enable": true,
-        "url": "ws://astrbot:6199/ws",
-        "messagePostFormat": "array",
-        "reportSelfMessage": false,
-        "reconnectInterval": 5000,
-        "token": "<与 AstrBot 完全相同的随机 token>",
-        "heartInterval": 30000,
-        "debug": false
-      }
-    ]
+  ```json
+  {
+    "id": "qq_napcat",
+    "type": "aiocqhttp",
+    "enable": true,
+    "ws_reverse_host": "0.0.0.0",
+    "ws_reverse_port": 6199,
+    "ws_reverse_token": "${NAPCAT_ONEBOT_TOKEN}"
   }
-}
-```
+  ```
 
-AstrBot WebUI → Add Adapter → **OneBot v11**：
+  这是 AstrBot 官方 `aiocqhttp` reverse-WS 字段；NapCat 是 client，主动连接
+  `ws://astrbot:6199/ws`，不能填 `127.0.0.1`。AstrBot 成功日志为
+  `aiocqhttp(OneBot v11) adapter connected.`。
+- `NAPCAT_ONEBOT_TOKEN` 由 operator 生成并存入已有 `deploy/.env`，渲染给 AstrBot；
+  同一个值在 NapCat WebUI 保存。QQ 密码和 WebUI access token 不在 `.env`、
+  Compose 或仓库中。
 
-- `id`: 任意唯一值，例如 `qq_napcat`。
-- `enable`: enabled。
-- Reverse WebSocket host: `0.0.0.0`（容器内监听）。
-- Reverse WebSocket port: `6199`。
-- Reverse WebSocket token: 与 NapCat 配置相同；若不启用 token 则两边都为空，但生产建议随机 token。
-- AstrBot 官方约定路径：`/ws`；成功日志为 `aiocqhttp(OneBot v11) adapter connected.`。
+首次登录选择 NapCat WebUI 的密码路径，而不是把密码放进自动化配置：
 
-如果使用旧 NapCat WebUI 版本，其字段可能仍显示“WebSockets 客户端/反向 WS”，但语义相同：NapCat 主动连 `ws://astrbot:6199/ws`，AstrBot 监听 `0.0.0.0:6199`。不要把 `6199` 暴露到公网；只暴露 AstrBot/NapCat WebUI 到管理网络。
+1. 通过 SSH tunnel 将服务器 loopback `6099` 映射到本机，再访问
+   `/webui`；不要公开发布 6099。
+2. 如 WebUI 要求 access token，从受控 NapCat 日志取得并仅在隧道页面输入。
+3. 选择密码登录；QQ 密码只在隧道后的页面输入。验证码、滑块、短信、人脸或新
+   设备确认必须由 operator 按 QQ 安全中心/手机 QQ 提示人工完成。
+4. 首次成功后的 QQ 身份写入 `napcat_qq`，后续重启依赖持久化快速登录；不得
+   循环删除卷或并行运行同一 QQ 的其他客户端。
 
-**为什么没有 GPU 配置：** NapCat Docker 官方模板没有 GPU 参数，Linux 启动依靠 Xvfb；先 CPU-only 运行。只有独立的 AI/OCR/视频工作负载明确需要 VA-API 时，才单独评估 `/dev/dri`；不要把 SR-IOV iGPU 当作防踢或反检测手段。
+本节描述部署契约，不代表已经登录 QQ、完成新设备验证或观察到 OneBot 连接；这些
+必须按 `docs/runbook.md` §7–§8 在目标环境中完成。
 
 ## 4. 运维：账号、掉线检测、重登与风险控制
 
 ### 4.1 账号与网络
 
-- 首选官方 Bot；若使用个人 QQ，准备专用、可丢弃且有正常历史的账号，不要把主账号当实验账号。账号年龄/活跃度可能影响风险，但没有公开、可验证的安全阈值；不要把“老号”当保证。
-- 固定一个长期服务器/IP/设备数据目录；不要频繁换 IP、容器 MAC、`machine-id`、QQ 数据卷或反复删除 `device.json`/会话文件。只有确认会话损坏或官方文档要求时才清理，并先备份。
-- 同一 QQ 只运行一个协议端；不要并行启动 NapCat、LLBot、Lagrange、go-cqhttp 或桌面 QQ 进行“对比”，这会触发真实的互踢/设备登录事件。
-- 限制群白名单、管理员、发送并发和主动通知；避免批量加群/加好友、短时间大量相似消息、重复失败重试、刷屏和高频 QR 扫码。这里是风险降低，不是规避检测。
-- 不使用不明公共 sign server。go-cqhttp 官方文档提醒签名服务可能看到登录时间、QQ 号、消息/目标 ID 等运行元数据；第三方服务也增加失效和泄露面。
+- NapCat 是当前生产协议端；准备专用、可丢弃且有正常历史的个人 QQ 账号，不要把主账号
+  当实验账号。账号年龄/活跃度可能影响风险，但没有公开、可验证的安全阈值；不要把“老号”
+  当保证。
+- 固定一个长期服务器/IP/设备数据目录；不要频繁换 IP、容器 MAC、`machine-id`、QQ
+  数据卷或反复删除 `device.json`/会话文件。只有确认会话损坏或官方文档要求时才清理，
+  并先备份。
+- 同一 QQ 只运行一个协议端；不要并行启动 NapCat、LLBot、Lagrange、go-cqhttp 或桌面
+  QQ 进行“对比”，这会触发真实的互踢/设备登录事件。
+- 限制群白名单、管理员、发送并发和主动通知；避免批量加群/加好友、短时间大量相似消息、
+  重复失败密码/验证码、刷屏和高频新设备验证。这里是风险降低，不是规避检测。
+- 不使用不明公共 sign server。go-cqhttp 官方文档提醒签名服务可能看到登录时间、QQ 号、
+  消息/目标 ID 等运行元数据；第三方服务也增加失效和泄露面。
 
 ### 4.2 可观测的掉线信号
 
@@ -264,7 +210,8 @@ AstrBot WebUI → Add Adapter → **OneBot v11**：
 - 容器层用 `restart: unless-stopped`/`always` 仅处理进程崩溃；不要用毫秒级无限重启。
 - NapCat 当前实现监听 `KickedOffLine`，会清空失效二维码并异步重启 Worker；AstrBot/Compose 层仍应保留人工确认入口。NapCat issue #1258 说明部分版本掉线后需要重启容器才能恢复。
 - 建议退避：第一次掉线等待 30–60 秒；第二次等待 5 分钟；连续 3 次在 30 分钟内发生则停止自动扫码/自动重启，通知管理员并暂停发送。**这是本项目的安全运营策略，不是 QQ 官方规定。**
-- 自动重登只使用持久化的快速登录态；如果要求新设备验证、滑块、人脸或安全中心确认，停止自动化，人工用官方 QQ 完成验证。不要在失败时删除所有数据卷或循环扫新二维码。
+- 自动重登只使用持久化的快速登录态；如果要求新设备验证、滑块、人脸或安全中心确认，
+  停止自动化，人工用官方 QQ 手机端完成验证。不要在失败时删除所有数据卷或循环扫新二维码。
 - 重登成功判据不是进程退出码：必须同时看到 QQ online、OneBot reverse WS reconnect、AstrBot adapter connected，并在白名单测试群收到一条低频测试消息。
 - 若同一账号多次被风控/冻结，停止协议端实验，保留脱敏日志，走 QQ 官方申诉/恢复流程或换账号；不要尝试用 GPU、随机设备指纹、公共签名服务或频繁换版本“绕过”风控。
 
@@ -272,7 +219,7 @@ AstrBot WebUI → Add Adapter → **OneBot v11**：
 
 1. [NapCatQQ README](https://github.com/NapNeko/NapCatQQ) — NTQQ 基础、OneBot 定位、维护状态。
 2. [NapCat releases](https://github.com/NapNeko/NapCatQQ/releases) — v4.18.28 / 2026-09-14。
-3. [NapCat-Docker README](https://github.com/NapNeko/NapCat-Docker) — `mlikiowa/napcat-docker`、amd64/arm64、卷路径、6099 WebUI。
+3. [NapCat-Docker README](https://github.com/NapNeko/NapCat-Docker) — `mlikiowa/napcat-docker`、amd64/arm64、卷路径、6099 WebUI；生产 digest 的 [Docker Hub amd64 layer](https://hub.docker.com/layers/mlikiowa/napcat-docker/v4.18.28/images/sha256-41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee)。
 4. [NapCat-Docker AstrBot compose](https://github.com/NapNeko/NapCat-Docker/blob/main/compose/astrbot.yml) — NapCat/AstrBot Docker 网络与环境变量模板。
 5. [NapCat issue #1728](https://github.com/NapNeko/NapCatQQ/issues/1728) — 2026 风控/频繁 KickedOffline，含版本冲突与相反个案。
 6. [NapCat issue #1796](https://github.com/NapNeko/NapCatQQ/issues/1796) — 2026 Docker/Linux 频繁或静默下线。

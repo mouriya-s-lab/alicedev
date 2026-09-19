@@ -24,7 +24,8 @@ reply:
 
 发起人：{{ sender.name }}（{{ sender.id }}）
 群聊：{{ chat.name }}（{{ chat.key }}）
-会话：{{ session_ref }}
+会话名称：{{ session_name }}
+会话标识：{{ session_ref }}
 
 调查请求：
 {{ text }}

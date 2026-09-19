@@ -24,6 +24,7 @@ required = {
     "TELEGRAM_BOT_TOKEN",
     "PASEO_PASSWORD",
     "ALICEDEV_INTERNAL_TOKEN",
+    "NAPCAT_ONEBOT_TOKEN",
 }
 found = set(pattern.findall(text))
 missing = sorted(name for name in required & found if not os.environ.get(name))

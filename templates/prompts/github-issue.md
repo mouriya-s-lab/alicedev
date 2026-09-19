@@ -18,6 +18,8 @@ reply:
 
 发起人：{{ sender.name }}（{{ sender.id }}）
 群聊：{{ chat.name }}（{{ chat.key }}）
+会话名称：{{ session_name }}
+会话标识：{{ session_ref }}
 GitHub Issue：{{ github.owner }}/{{ github.repo }} #{{ github.number }}
 标题：{{ github.title }}
 状态：{{ github.state }}

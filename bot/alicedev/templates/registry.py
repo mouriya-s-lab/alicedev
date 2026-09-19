@@ -104,6 +104,7 @@ class TemplateVars:
     images: tuple[str, ...] = ()
     github: GithubVar | None = None
     session_ref: str = ""
+    session_name: str = ""
 
     def as_context(self) -> dict[str, Any]:
         return {
@@ -114,6 +115,7 @@ class TemplateVars:
             "images": list(self.images),
             "github": _dc_dict(self.github),
             "session_ref": self.session_ref,
+            "session_name": self.session_name,
         }
 
 

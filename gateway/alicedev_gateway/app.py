@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass
 from html import escape
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -22,6 +24,25 @@ from .tokens import COOKIE_NAME, COOKIE_MAX_AGE, SignedCookieCodec, TokenTable
 _LOGGER = logging.getLogger("alicedev_gateway.access")
 _SWEEP_INTERVAL_SECONDS = 60.0
 _STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css"})
+_PREVIEW_SCRIPT = 'document.getElementById("redeem").submit();'
+_PREVIEW_SCRIPT_HASH = base64.b64encode(
+    hashlib.sha256(_PREVIEW_SCRIPT.encode("utf-8")).digest()
+).decode("ascii")
+_PREVIEW_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": (
+        "default-src 'none'; "
+        f"script-src 'sha256-{_PREVIEW_SCRIPT_HASH}'; "
+        "form-action 'self'; "
+        "base-uri 'none'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none'"
+    ),
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-Robots-Tag": "noindex",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +93,9 @@ def create_app(config: GatewayConfig) -> web.Application:
     app["token_table"] = tokens
     app["cookie_codec"] = cookies
     app["report_renderer"] = renderer
+    app.router.add_get("/t/{token}", preview_token)
+    app.router.add_post("/t/{token}", redeem_token)
     app.router.add_post("/internal/tokens", issue_token)
-    app.router.add_get("/t/{token}", redeem_token)
     app.router.add_get("/_alicedev/health", health)
     app.router.add_get("/_alicedev/", status_page)
     app.router.add_get("/_alicedev/r/{report_id}/{basename}", report)
@@ -114,13 +136,12 @@ async def cookie_gate_middleware(
 ) -> web.StreamResponse:
     path = request.path
     if path == "/internal/tokens":
+        if request.method != "POST":
+            raise web.HTTPMethodNotAllowed(request.method, {"POST"})
         return await handler(request)
-    if (
-        path.startswith("/t/")
-        or path.startswith("/_alicedev/r/")
-        or path.startswith("/_alicedev/static/")
-        or path == "/_alicedev/health"
-    ):
+    if path.startswith("/t/"):
+        if request.method not in {"GET", "HEAD", "POST"}:
+            raise web.HTTPMethodNotAllowed(request.method, {"GET", "HEAD", "POST"})
         return await handler(request)
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
@@ -184,6 +205,19 @@ async def issue_token(request: web.Request) -> web.Response:
     return web.json_response({"token": issued.token, "url": url})
 
 
+async def preview_token(request: web.Request) -> web.Response:
+    token = request.match_info["token"]
+    tokens: TokenTable = request.app["token_table"]
+    if not tokens.validate_token(token) or tokens.peek(token) is None:
+        raise web.HTTPForbidden(text="链接无效、已使用或已过期。\n")
+    return web.Response(
+        text=_render_token_preview(request.path),
+        content_type="text/html",
+        charset="utf-8",
+        headers=_PREVIEW_HEADERS,
+    )
+
+
 async def redeem_token(request: web.Request) -> web.StreamResponse:
     token = request.match_info["token"]
     tokens: TokenTable = request.app["token_table"]
@@ -192,7 +226,7 @@ async def redeem_token(request: web.Request) -> web.StreamResponse:
         raise web.HTTPForbidden(text="链接无效、已使用或已过期。\n")
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
-    response = web.HTTPFound(
+    response = web.HTTPSeeOther(
         location=f"/_alicedev/?go={quote(record.target, safe='')}"
     )
     response.set_cookie(
@@ -281,7 +315,11 @@ async def static_asset(request: web.Request) -> web.StreamResponse:
 
 
 async def proxy(request: web.Request) -> web.StreamResponse:
-    if request.path.startswith("/_alicedev/"):
+    if (
+        request.path.startswith("/_alicedev/")
+        or request.path.startswith("/t/")
+        or request.path == "/internal/tokens"
+    ):
         raise web.HTTPNotFound(text="网关路径不存在。\n")
     paseo: PaseoProxy = request.app["paseo_proxy"]
     if request.headers.get("Upgrade", "").lower() == "websocket":
@@ -424,6 +462,28 @@ def _render_status(status: BotStatus, target: str | None) -> str:
 </body>
 </html>
 """
+
+
+def _render_token_preview(action: str) -> str:
+    escaped_action = escape(action, quote=True)
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>继续 alicedev</title>
+</head>
+<body>
+  <h1>继续 alicedev</h1>
+  <p>如果页面没有自动跳转，请点击下面的按钮。</p>
+  <form id="redeem" method="post" action="{escaped_action}">
+    <button type="submit">继续</button>
+  </form>
+  <script>{_PREVIEW_SCRIPT}</script>
+</body>
+</html>
+"""
+
 
 
 def _public_scheme(config: GatewayConfig) -> str:

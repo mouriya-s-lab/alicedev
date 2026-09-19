@@ -47,6 +47,32 @@ def _chat_name(ctx: "CommandContext") -> str:
     return ctx.chat_key
 
 
+async def _ensure_requirement(ctx: "CommandContext", session_ref: str) -> bool:
+    """Persist requirement metadata once, including idempotent retries."""
+    services = ctx.services
+    async with services.store.lock:
+        existing = await services.store.fetch_one(
+            "SELECT id FROM requirements WHERE session_ref = ?", (session_ref,)
+        )
+        if existing is not None:
+            return False
+        rid = await services.store.next_id("seq_requirements")
+        await services.store.execute(
+            "INSERT INTO requirements (id, chat_key, session_ref, author_key, "
+            "author_name, text, images, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'open')",
+            (
+                rid,
+                ctx.chat_key,
+                session_ref,
+                ctx.user_key,
+                ctx.sender_name,
+                ctx.args,
+                json.dumps([]),
+            ),
+        )
+    return True
+
+
 async def _handle_template(
     ctx: "CommandContext", *, template_name: str, command_name: str
 ) -> None:
@@ -59,7 +85,7 @@ async def _handle_template(
         await ctx.reply_text(f"用法：/{command_name} <内容>")
         return
 
-    record = await services.sessions.create_and_inject(
+    creation = await services.sessions.create_and_inject(
         chat_key=ctx.chat_key,
         template=template,
         vars=build_template_vars(ctx),
@@ -67,17 +93,15 @@ async def _handle_template(
         platform_message_id=ctx.event.message_obj.message_id,
         sender_key=ctx.user_key,
     )
-
+    record = creation.record
     if template.record == "requirement":
-        rid = await services.store.next_id("seq_requirements")
-        await services.store.execute(
-            "INSERT INTO requirements (id, chat_key, session_ref, author_key, "
-            "author_name, text, images, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'open')",
-            (rid, ctx.chat_key, record.session_ref, ctx.user_key, ctx.sender_name,
-             ctx.args, json.dumps([])),
-        )
+        inserted = await _ensure_requirement(ctx, record.session_ref)
+        if not inserted:
+            return
+    if not creation.created:
+        return
 
-    await ctx.reply_text(f"已创建 {record.session_ref}")
+    await ctx.reply_text(f"当前会话：「{record.name}」")
 
 
 def register(registry: "CommandRegistry", services: "Services") -> None:

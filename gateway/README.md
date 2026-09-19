@@ -35,7 +35,7 @@ docker run --rm --env-file deploy/dev/gateway.env \
 
 ## 路由与安全边界
 
-- `POST /internal/tokens` 只接受 `X-Alicedev-Token`，并验证 `/h/<server>/workspace/<workspace>?open=agent%3A<agent>&embed=1` 目标。token 存在单进程内存表，最长 6 小时；`GET /t/<token>` 通过无 `await` 的 `dict.pop` 消费，设置 `alicedev_s`（`iat`、`exp`、`sub`）HMAC cookie，然后 `302` 到状态页。cookie 使用 `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`。
+- `POST /internal/tokens` 只接受 `X-Alicedev-Token`，并验证 `/h/<server>/workspace/<workspace>?open=agent%3A<agent>&embed=1` 目标。token 存在单进程内存表，最长 6 小时；`GET`/`HEAD /t/<token>` 只校验并 peek，不消费，返回 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`、`X-Robots-Tag: noindex` 的确认页：浏览器会自动提交同一路径的 `POST` 表单，同时保留可见的手动按钮。只有 `POST /t/<token>` 执行无 await 的原子消费与过期检查；成功设置 `alicedev_s`（`iat`、`exp`、`sub`）HMAC cookie，并以 `303` 到状态页。重复或过期的 POST 失败。cookie 使用 `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=2592000`。
 - Paseo UI 除一次性入口、报告、网关静态资源和 health 外都需要有效 cookie。HTTP 上游始终收到网关配置的 `Authorization: Bearer $PASEO_PASSWORD`；浏览器传来的 Authorization/Cookie 不会转发。
 - WebSocket 由网关分别完成浏览器和上游握手。上游收到 `Authorization`、`Host: $PUBLIC_HOST`、`Origin: https://$PUBLIC_HOST` 与 `paseo.bearer.$PASEO_PASSWORD`；浏览器不会收到该子协议或密码。
 - Paseo web bundle以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（HTTPS/443 下唯一可用的同源模式）。网关提供 `GET /_paseo/hosts.json` → `[{"id":"alicedev","label":"alicedev","basePath":"/daemons/alicedev"}]`（需 cookie），并把 `/daemons/alicedev/*` 去掉前缀后转发到 Paseo（浏览器实际拨号 `wss://$PUBLIC_HOST/daemons/alicedev/ws`）。
@@ -44,6 +44,6 @@ docker run --rm --env-file deploy/dev/gateway.env \
 
 ## 重启语义
 
-签名 cookie 是无状态的：只要 `GATEWAY_SECRET` 不变且未过期，网关重启后仍然有效。一次性 token 只存在当前进程内存中，任何重启都会使尚未消费的 token 失效；部署 runbook 必须把这一点作为操作行为记录。
+签名 cookie 是无状态的：只要 `GATEWAY_SECRET` 不变且未过期，网关重启后仍然有效。一次性 token 只存在当前进程内存中；GET/HEAD 预览本身不会消费 token，但任何重启都会使所有尚未成功 POST 消费的 token 失效。部署 runbook 必须把这一点作为操作行为记录。
 
 状态页会请求 bot 的 `GET /v1/status`。bot 不可达、返回非 200 或状态 JSON 无效时，状态页仍返回 200，并明确显示「降级（bot 不可用）」而不是伪造健康状态。

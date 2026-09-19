@@ -160,6 +160,7 @@ class InternalApi:
                 "session": record.session_ref,
                 "chat_key": record.chat_key,
                 "template": record.template,
+                "name": record.name,
                 "status": record.status.value,
                 "reply_spec": reply_spec,
             }

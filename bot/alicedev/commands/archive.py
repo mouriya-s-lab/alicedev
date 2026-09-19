@@ -22,7 +22,8 @@ async def _handle_archive(ctx: "CommandContext") -> None:
         return
 
     row = await ctx.services.store.fetch_one(
-        "SELECT session_ref FROM sessions WHERE session_ref = ? AND chat_key = ?",
+        "SELECT session_ref, name FROM sessions "
+        "WHERE session_ref = ? AND chat_key = ?",
         (session_ref, ctx.chat_key),
     )
     if row is None:
@@ -30,7 +31,7 @@ async def _handle_archive(ctx: "CommandContext") -> None:
         return
 
     await ctx.services.sessions.archive(session_ref)
-    await ctx.reply_text(f"已归档 {session_ref}")
+    await ctx.reply_text(f"已归档会话：「{row[1]}」")
 
 
 def register(registry: "CommandRegistry", services: "Services") -> None:

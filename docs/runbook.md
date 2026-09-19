@@ -1,12 +1,14 @@
 # alicedev 部署运行手册
 
 本文是 `nekoringo2` 上实际部署状态的记录，也是首装、升级和排障手册。
-生产 Compose 只把 AstrBot dashboard 绑定到 `127.0.0.1:6185`；公网入口只有
-Caddy 的 80/443，Caddy 再转发到内部 gateway。不要把 paseo、gateway、AstrBot
-内部 API 或 t2i 端口发布到主机。
+生产 Compose 只把 AstrBot dashboard 绑定到 `127.0.0.1:6185`，NapCat WebUI 绑定到
+`127.0.0.1:6099`；公网入口只有 Caddy 的 80/443，Caddy 再转发到内部 gateway。
+不要把 paseo、gateway、AstrBot 内部 API、OneBot reverse WS `6199` 或 t2i 端口发布到主机。
+NapCat 使用 `internal` 连接 AstrBot，并额外加入 `edge` 以访问 QQ 出站服务；不启用任何
+GPU 设备或 reservation。
 Compose 还会启动两个短命 helper：`reports-init` 在共享卷中创建 `_published`
 子目录，并把报告卷 chown 到 1000:1000（容器内 `paseo` 用户），确保 gateway
-的只读 subpath mount 在首次启动时存在且 agent 可写报告；`astrbot-init` 在每次
+的只读 subpath mount 在首次启动时存在并 agent 可写报告；`astrbot-init` 在每次
 `up` 时把渲染后的 `cmd_config.rendered.json` / `alicedev_config.rendered.json`
 复制进 `astrbot_data` 卷（此前只读单文件 bind mount 会在 AstrBot 重写配置时
 触发 EBUSY，故改用卷内复制）。
@@ -29,8 +31,9 @@ Compose 还会启动两个短命 helper：`reports-init` 在共享卷中创建 `
 
 凭据从已有 secret store/IaC 或管理员受控的部署环境取得，不在聊天、issue、日志
 或 git 中粘贴。`deploy/.env` 仅存在于部署主机并设为 `0600`；
-`deploy/.env.example` 只有占位值。Telegram token 通过渲染后的 AstrBot
-`cmd_config.json` 使用，GitHub token 只在需要认证的 GitHub 预取时提供。
+`deploy/.env.example` 只有占位值。Telegram token、`NAPCAT_ONEBOT_TOKEN` 和
+其他应用 secrets 通过渲染后的 AstrBot 配置/Compose 环境使用；QQ 登录密码只在
+SSH tunnel 后的 NapCat WebUI 输入，从不写入 `.env`、Compose、仓库、日志或命令行。
 
 ## 2. 首次部署
 
@@ -46,7 +49,7 @@ ssh nekoringo2 'mkdir -p /srv/alicedev/src && hostname && uname -m && docker ver
 ssh nekoringo2 'ss -tlnp | grep -E ":(80|443)\\b" || true'
 ```
 
-提前拉取并记录生产使用的官方镜像。这里的 digest 是 `deploy/docker-compose.yml`
+提前拉取并记录生产使用的镜像。这里的 digest 是 `deploy/docker-compose.yml`
 中的 amd64 pin；按 digest 引用检查镜像，因为只用 tag 的 `docker image inspect`
 在 digest-only pull 后可能找不到本地 tag：
 
@@ -54,9 +57,12 @@ ssh nekoringo2 'ss -tlnp | grep -E ":(80|443)\\b" || true'
 ssh nekoringo2 'docker pull caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0'
 ssh nekoringo2 'docker pull soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf'
 ssh nekoringo2 'docker pull soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e'
-ssh nekoringo2 'for ref in caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0 soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e; do docker image inspect --format=\"{{.Id}} {{.RepoDigests}}\" \"$ref\"; done'
+ssh nekoringo2 'docker pull mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee'
+ssh nekoringo2 'for ref in caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0 soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee; do docker image inspect --format="{{.Id}} {{.RepoDigests}}" "$ref"; done'
 ```
 
+NapCat 的 `v4.18.28` digest 是 Docker Hub 的 `linux/amd64` manifest；Compose 同时
+声明 `platform: linux/amd64`。不要把该服务改回 `latest` 或仅 tag 引用。
 若镜像 registry 或 digest 发生变化，先更新 Compose pin 和本节记录，再继续；不要
 为了“先跑起来”改成无 pin 的 `latest`。
 
@@ -76,8 +82,12 @@ ssh nekoringo2 mkdir -p /srv/alicedev/src/paseo-alicedev && rsync -az --delete -
 说明：`deploy/.env`、`deploy/astrbot/*.rendered.json` 和 `src/` 只存在于服务端，
 同步时必须排除：前两者不会被 Mac 侧覆盖；`src/` 不在 alicedev 检出里，缺少
 `--exclude 'src/'` 时 `--delete` 会把 `src/paseo-alicedev` 整个删掉（只需重跑第二条
-rsync 即可恢复，但要先补回排除）。升级时先在 Mac 检出审阅 commit，记下同步时刻的
-`git rev-parse HEAD`（即审计依据），再走同一组 rsync。
+rsync 即可恢复，但要先补回排除）。QQ 身份、NapCat 配置/插件和 AstrBot 数据都在
+命名 Docker volumes（`alicedev_napcat_qq`、`alicedev_napcat_config`、
+`alicedev_napcat_plugins`、`alicedev_astrbot_data`）中，位于 `/srv/alicedev` 之外；
+因此 rsync `--delete` 不会触碰运行时身份。禁止把这些卷改为 `./napcat/*` 或其他
+工作树 bind mount。升级时先在 Mac 检出审阅 commit，记下同步时刻的 `git rev-parse HEAD`
+（即审计依据），再走同一组 rsync。
 
 ### 2.3 环境、渲染和构建
 
@@ -98,10 +108,12 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 
 `make render-config` 会把 `deploy/astrbot/cmd_config.json` 和
 `deploy/astrbot/alicedev_config.json` 渲染成仅存在于部署工作树的
-`*.rendered.json`。前者预置 Telegram、WebChat 和 `t2i_endpoint=http://t2i:8999`；
-后者把 paseo/gateway/报告卷和 `/AstrBot/alicedev-templates` 传给插件。模板
-文件使用 JSON 安全转义，不能用手工 `sed` 替换密码。`astrbot-init` 在每次 `up`
-时把渲染产物复制进 `astrbot_data` 卷。
+`*.rendered.json`。前者预置 Telegram、WebChat、NapCat 的 `aiocqhttp`
+reverse WS（`0.0.0.0:6199`，token 来自 `NAPCAT_ONEBOT_TOKEN`）和
+`t2i_endpoint=http://t2i:8999`；后者把 paseo/gateway/报告卷和
+`/AstrBot/alicedev-templates` 传给插件。模板文件使用 JSON 安全转义，不能用手工
+`sed` 替换密码或 token。`astrbot-init` 在每次 `up` 时把渲染产物复制进
+`astrbot_data` 卷；`NAPCAT_ONEBOT_TOKEN` 缺失时 Compose 必须拒绝启动。
 
 镜像构建分两步：先由 Compose 从 `PASEO_REPO_CONTEXT` 的
 `docker/arch/Dockerfile` 构建基础镜像 `alicedev/paseo-arch:local`（build args：
@@ -118,9 +130,10 @@ ssh nekoringo2 'cd /srv/alicedev && make up'
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps'
 ```
 
-当前服务：`caddy`、`gateway`、`astrbot`、`t2i`、`paseo` 全部 healthy，
-另有两个一次性 helper：`reports-init`、`astrbot-init`。其中 astrbot 和 paseo
-还接入 `edge` 网络，用于出站访问（LLM API、GitHub）。
+当前服务：`caddy`、`gateway`、`astrbot`、`t2i`、`paseo` 应为 healthy；`napcat` 为
+生产必需但需人工完成 QQ 登录的运行容器；另有两个一次性 helper：
+`reports-init`、`astrbot-init`。其中 astrbot、napcat 和 paseo 还接入 `edge` 网络，
+用于出站访问（LLM API、GitHub、QQ）；NapCat WebUI 仍只绑定 loopback。
 
 首次启动后再初始化 workspace 卷：`make workspace-init` 把 OpenAlice 克隆到
 workspace 卷的 `/workspace/openalice`（可重复执行，已存在时跳过克隆）：
@@ -129,12 +142,16 @@ workspace 卷的 `/workspace/openalice`（可重复执行，已存在时跳过�
 ssh nekoringo2 'cd /srv/alicedev && make workspace-init'
 ```
 
-`make up` 不会重新 build；源码或 harness 变化后先走 §2.2 的 rsync，再跑
-`make build`。`make down` 不删除卷，避免误删会话、omp 凭据、workspace 和报告。
+`make up` 不会重新 build；每次会先用当前服务端 `deploy/.env` 运行
+`make render-config`，再检查两个 rendered JSON，最后启动 Compose。源码或 harness
+变化后先走 §2.2 的 rsync，再跑 `make build`；配置变化只需 `make up`。`make down`
+不删除卷，避免误删会话、omp 凭据、workspace、报告和 NapCat QQ 身份。
 
-轮换 `GATEWAY_SECRET`、`ALICEDEV_INTERNAL_TOKEN`、`PASEO_PASSWORD`
-（都只在服务端的 `deploy/.env`，`0600`）后，必须重跑 `make render-config`
-再 `docker compose ... up -d`（`astrbot-init` 会重新播种配置）。轮换
+轮换 `GATEWAY_SECRET`、`ALICEDEV_INTERNAL_TOKEN`、`PASEO_PASSWORD` 或
+`NAPCAT_ONEBOT_TOKEN`（都只在服务端的 `deploy/.env`，`0600`）后，必须用
+`make up` 重新渲染并启动；若绕过 Makefile 直接运行 `docker compose ... up -d`，
+先手动执行 `make render-config`。轮换 `NAPCAT_ONEBOT_TOKEN` 后还要按 §7.1 在
+NapCat WebUI 保存同一个新值。`astrbot-init` 会重新播种配置。轮换
 `GATEWAY_SECRET` 会让已发分享 cookie 失效；重启 gateway 会让未消费的一次性
 token 失效。
 
@@ -241,11 +258,14 @@ and `ALICEDEV_INTERNAL_TOKEN`; never change that container-to-container URL to
 
 ## 6. 备份与恢复
 
-先暂停写入（至少停 AstrBot，报告生成期间也停 paseo agent），再备份：
+先暂停写入（至少停 AstrBot、NapCat，报告生成期间也停 paseo agent），再备份：
 
 - DuckDB：AstrBot 持久化卷中的 `/AstrBot/data/plugin_data/alicedev/alicedev.duckdb`
   （宿主机不应假设插件源码 bind mount 下有数据库）。
 - `alicedev_astrbot_data`：AstrBot 平台和 dashboard 配置。
+- `alicedev_napcat_qq`：QQNT 设备身份、登录态和 QQ 本地数据；这是敏感备份。
+- `alicedev_napcat_config`：NapCat WebUI/OneBot 客户端配置（含反向 WS token）。
+- `alicedev_napcat_plugins`：NapCat 插件目录。
 - `alicedev_paseo_home`：paseo 状态、`config.json`、omp 凭据（这是秘密备份）。
 - `alicedev_workspace` 与 `alicedev_reports`：agent 工作区、源报告和 `_published`。
 - `alicedev_caddy_data`：ACME 证书/账户状态；不要只备份 Caddyfile。
@@ -253,67 +273,94 @@ and `ALICEDEV_INTERNAL_TOKEN`; never change that container-to-container URL to
 示例（目标备份目录必须由 operator 保护，命令不打印卷内容）：
 
 ```bash
-ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml stop astrbot paseo'
+ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml stop astrbot napcat paseo'
+ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_qq:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_qq-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_config:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_config-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_plugins:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_plugins-$(date +%Y%m%d%H%M%S).tgz -C /src .'
 ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_paseo_home:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/paseo_home-$(date +%Y%m%d%H%M%S).tgz -C /src .'
 ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_astrbot_data:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 sh -c '\''tar czf /dst/duckdb-$(date +%Y%m%d%H%M%S).tgz -C /src plugin_data/alicedev/alicedev.duckdb'\''
-ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml start paseo astrbot'
+ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml start paseo napcat astrbot'
 ```
 
 恢复前停止所有消费者、先把目标卷移到隔离备份，再解包；恢复后检查
 `paseo_home` 权限属于 uid/gid 1000（容器内 `paseo`），再按 §5 做 provider diagnostic
-和 WebChat 小流量验证。
+和 WebChat 小流量验证。恢复 `alicedev_napcat_qq` 后必须确认 QQ 设备身份仍为同一账号；
+不要为了“修复”登录态删除该卷。
 
 ## 7. QQ 与 Telegram onboarding
 
-### 7.1 QQ 官方 Bot（首选）
+### 7.1 QQ NapCat（生产必需）
 
-研究结论首选 AstrBot `qq_official`，而不是个人 QQ 协议端
-([`docs/research/qq-protocol.md:97-102`](research/qq-protocol.md))。上线前必须完成：
+本项目的操作员约束是使用个人 QQ 账号并接入 OneBot v11；因此生产路径固定为
+NapCat（NTQQ/Linux QQ）+ AstrBot `aiocqhttp` reverse WebSocket。这里的 NapCat
+不是可选 fallback；Compose、AstrBot 配置和备份都按它存在来设计。候选比较和风险
+依据见 [`docs/research/qq-protocol.md`](research/qq-protocol.md)，但研究中的其他
+候选不是本项目的生产 onboarding。当前文档**不声称 QQ 已登录或上线**；只有完成
+本节并观察到 §8 的连接证据后，才能记录为已完成。
 
-1. QQ 开放平台创建/审核并完成上线。
-2. 把 `160.191.41.242` 加入开放平台 IP allowlist。
-3. 让目标群管理员添加 Bot，并开启所需的群消息范围。
-4. 在 AstrBot 平台配置中选择 `qq_official`；官方 API 不需要 NapCat、OneBot、
-   qsign 或额外 QQ 容器（[`docs/research/qq-protocol.md:135-152`](research/qq-protocol.md)）。
+#### 首次启动与 token
 
-### 7.2 NapCat fallback（仅在必须使用个人 QQ 时）
+1. 在受控终端生成一次随机 `NAPCAT_ONEBOT_TOKEN`（例如
+   `openssl rand -hex 32`），把结果写入服务端 `deploy/.env`，并保持该文件
+   `0600`。该 token 只用于 AstrBot ↔ NapCat 的 reverse WS；不要把它贴到聊天、
+   issue、日志或截图。`cmd_config.json` 的占位符由现有 `make render-config`
+   渲染，Compose 在 token 缺失时拒绝启动。
+2. 按 §2 完成镜像、渲染和启动。NapCat 的 QQ 身份、WebUI 配置和插件写入
+   `alicedev_napcat_qq`、`alicedev_napcat_config`、`alicedev_napcat_plugins`
+   命名卷；不要改成工作树 bind mount。
+3. 需要 WebUI 访问 token 时，只在服务器受控 shell 中查看
+   `docker compose ... logs napcat` 的相关行，然后通过下面的隧道在浏览器输入；
+   不要把它写入 `.env` 或仓库。
 
-若目标群不能添加官方 Bot，研究给出的 fallback 是 NapCat + AstrBot reverse
-WebSocket；它需要持久化 QQ 数据，且不能保证不掉线/不封号
-([`docs/research/qq-protocol.md:154-195`](research/qq-protocol.md))。仅在隔离账号上
-评估，生产主 Compose 不包含它。示例片段（先固定 tag，不要直接信任 `latest`）：
+#### 选择 WebUI 密码登录
 
-```yaml
-services:
-  napcat:
-    image: mlikiowa/napcat-docker:v4.18.28
-    restart: always
-    environment:
-      NAPCAT_UID: "1000"
-      NAPCAT_GID: "1000"
-      MODE: astrbot
-      TZ: Asia/Shanghai
-    ports:
-      - "127.0.0.1:6099:6099"
-    volumes:
-      - ./napcat/qq:/app/.config/QQ
-      - ./napcat/config:/app/napcat/config
-      - ./napcat/plugins:/app/napcat/plugins
-    networks: [internal]
+1. 从运维机建立隧道（NapCat 只绑定服务器 loopback）：
 
-  # Add only the reverse-WS listener to AstrBot, bound to localhost:
-  # 127.0.0.1:6199:6199; NapCat connects to ws://astrbot:6199/ws.
-networks:
-  internal:
-    external: true
-    name: alicedev
-```
+   ```bash
+   ssh -N -L 16099:127.0.0.1:6099 nekoringo2
+   ```
 
-首次扫码只通过 SSH tunnel 打开 `127.0.0.1:6099/webui`；不要把 QQ 密码或
-NapCat WebUI token 放进 Compose。风险包括 QQNT/账号风控、踢下线、设备冲突和
-登录态失效；不要同时启动同一 QQ 的 NapCat、LLBot、Lagrange 或桌面 QQ。
+2. 在本机浏览器打开 `http://127.0.0.1:16099/webui`。如 WebUI 要求 NapCat
+   WebUI access token，输入第 3 步从受控日志取得的值。
+3. 在 WebUI 选择**密码登录**，只在此隧道后的页面输入 QQ 账号和 QQ 密码。
+   QQ 密码永远不进入 Compose、`.env`、命令行、浏览器自动化脚本、日志、截图或
+   备份说明；本项目不提供密码环境变量，也不声称密码登录已完成。
+4. 如果 QQ 要求验证码、滑块、短信、人脸或“新设备登录”确认，停止自动重试，
+   按 QQ 手机端/安全中心的提示人工完成验证，再回到 WebUI 继续一次登录。验证
+   失败时不要删除 `alicedev_napcat_qq`、反复扫描二维码、频繁换 IP 或切换协议端；
+   这些动作会丢失设备身份或放大风控。
+5. 登录成功后，在 NapCat WebUI 保存 OneBot v11 **反向 WebSocket 客户端**：
+   - URL：`ws://astrbot:6199/ws`（NapCat 主动连接；不能填 `127.0.0.1`）。
+   - token：与 `deploy/.env` 的 `NAPCAT_ONEBOT_TOKEN` 完全相同。
+   - 启用客户端并保存；字段名称随 NapCat WebUI 版本可能略有不同，但角色、
+     URL、token 和 `/ws` 路径不变。
+   AstrBot 已由 `cmd_config.json` 预置为 `0.0.0.0:6199` 的 `aiocqhttp` server；
+   宿主机不发布 6199。
 
-### 7.3 Telegram
+#### 后续快速登录、日志和重连
+
+- 首次成功后，QQNT 登录态会留在 `alicedev_napcat_qq`；之后重启/升级应使用
+  持久化快速登录，不在自动化中再次提交 QQ 密码。`alicedev_napcat_config`
+  保存 reverse WS 目标和 token；变更 token 时同时更新 `.env`、重渲染 AstrBot
+  配置并在 NapCat WebUI 保存新 token。
+- 观察连接必须同时满足：NapCat 日志显示 QQ online/登录成功；AstrBot 日志出现
+  `aiocqhttp(OneBot v11) adapter connected.`；没有持续的 reverse WS close/heartbeat
+  timeout；白名单测试群收到一条低频测试消息。容器 `running` 单独不等于 QQ 在线。
+- 排障先看 `docker compose ... logs --tail=200 napcat astrbot`。`KickedOffline`、
+  `登录已失效`、`账号异常`、验证码/新设备提示表示 QQ 会话问题；`aiocqhttp
+  adapter has been closed` 或 heartbeat timeout 表示 OneBot 链路断开，不能直接
+  判定封号。先检查命名卷未被替换、URL/token 是否一致和 AstrBot 6199 是否仅在
+  Compose 网络可达，再人工决定是否重启。
+- 进程崩溃可由 `restart: unless-stopped` 恢复；QQ 掉线或新设备验证不要做毫秒级
+  无限重启。采用人工确认和退避，连续失败就停下并保留完整脱敏日志；不要为重登
+  删除卷、启用 GPU、使用公共 sign server 或并行试验多个协议端。
+- **同一 QQ 只能同时运行一个客户端/协议端**：NapCat、桌面 QQ、LLBot、
+  Lagrange、go-cqhttp 等不能并行。尤其不要为了比较稳定性让同一 QQ 同时登录，
+  这会制造真实的互踢和设备冲突。
+- QQ 身份和 NapCat 配置备份按 §6 执行；备份属于敏感凭据材料，恢复时必须保持
+  同一命名卷和账号身份，不要把卷导出到源码同步树。
+
+### 7.2 Telegram
 
 BotFather token 只写入 `deploy/.env` 的 `TELEGRAM_BOT_TOKEN`，执行
 `make render-config` 后由渲染文件提供给 AstrBot。不要把 token 放到
@@ -348,6 +395,23 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 
 不要从浏览器向上游发送 `Authorization` 或 `Sec-WebSocket-Protocol`；这些由 gateway
 注入。浏览器应该只连接 HTTPS 公共域名，刷新后仍须持有有效分享 cookie。
+
+### NapCat / QQ reverse WebSocket
+
+```bash
+ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml logs --tail=200 napcat astrbot'
+ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps napcat astrbot'
+```
+
+正常链路应同时有：NapCat 的 QQ online/登录成功状态、AstrBot 的
+`aiocqhttp(OneBot v11) adapter connected.`，以及 NapCat 持续连接
+`ws://astrbot:6199/ws`。只看到 NapCat 容器 `running` 不代表 QQ 已在线。
+`KickedOffline`、`登录已失效`、`账号异常`、滑块/新设备提示属于 QQ 会话验证；
+`aiocqhttp adapter has been closed`、reverse WS close 或 heartbeat timeout 属于
+OneBot 链路。先从同一 SSH tunnel 打开 WebUI 检查在线状态和客户端 URL/token，
+再按 §7.1 的人工验证与退避处理；不要删除 `alicedev_napcat_qq`，也不要并行
+启动同一 QQ 的其他客户端。服务器没有 6199 的 host listener，外部只应能看到
+loopback WebUI 6099。
 
 ### 嵌入页 / self-hosted manifest
 
@@ -398,7 +462,8 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 ### 9.1 当前状态
 
 - 生产入口 `https://alicedev.237575.xyz`，`caddy`、`gateway`、`astrbot`、`t2i`、
-  `paseo` 全部 healthy。
+  `paseo` 的应用 healthcheck 目标为 healthy；NapCat 容器已纳入 Compose，但 QQ
+  登录/OneBot 连接仍未完成，不能据此声称 QQ 已上线。
 - 端口行为：`/_alicedev/health` 公开 200；`/` 无分享 cookie 时 403；
   `/manifest.json` 无 cookie 时 403（PWA manifest，无害，见 §8）。
 

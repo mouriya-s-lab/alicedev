@@ -28,7 +28,7 @@ build: harness render-config
 	$(COMPOSE) --profile build build paseo-base
 	$(COMPOSE) build gateway paseo
 
-up: test-env test-rendered
+up: test-env render-config test-rendered
 	$(COMPOSE) up -d
 
 # Seed the workspace volume: clone OpenAlice once and ensure the alicedev dir exists.
@@ -44,5 +44,5 @@ logs: test-env
 
 deploy: harness render-config
 	ssh nekoringo2 'mkdir -p /srv/alicedev'
-	rsync -az --exclude '.git/' --exclude 'deploy/.env' ./ nekoringo2:/srv/alicedev/
+	rsync -az --exclude '.git/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' ./ nekoringo2:/srv/alicedev/
 	ssh nekoringo2 'cd /srv/alicedev && make build && make up'
