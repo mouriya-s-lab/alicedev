@@ -1,0 +1,91 @@
+Telegram production cross-evidence (nekoringo2)
+================================================
+
+Captured: 2026-09-19 UTC. No tokens, passwords, or one-time URL values are
+included. The DuckDB rows below were queried from a read-only snapshot of the
+live AstrBot store at /AstrBot/data/plugin_data/alicedev/alicedev.duckdb.
+
+1. sessions rows
+----------------
+Query scope: chat_key = 'telegram:FriendMessage:865341181'
+
+columns: session_ref, chat_key, template, provider, model, thinking, agent_id,
+         workspace_id, server_id, status, created_by, created_at,
+         last_activity_at
+
+s_kukcnugeoq | telegram:FriendMessage:865341181 | requirement | omp-alicedev |
+opencode-go/muse-spark-1.3-contributor | medium |
+f85f2753-fbdd-4db0-8d9f-c2d873668887 | wks_7e243c7a9c97a5b7 |
+srv_rAoczNBNKn6i | active | telegram:865341181 |
+2026-09-19 18:47:00.719532 | 2026-09-19 18:47:00.719532
+
+s_jcq3eoeqeu | telegram:FriendMessage:865341181 | github-issue | omp-alicedev |
+opencode-go/muse-spark-1.3-contributor | medium |
+b452db24-b6bf-4e66-9e6d-098660293f57 | wks_b44189c1d7c37e5f |
+srv_rAoczNBNKn6i | active | telegram:865341181 |
+2026-09-19 18:56:46.922240 | 2026-09-19 18:56:46.922240
+
+2. reply_deliveries rows
+------------------------
+columns: reply_id, session_ref, msgs, state, platform_message_ids, created_at,
+         updated_at
+
+ba6549aa-e952-4b87-9738-2ea636ddddb4 | s_kukcnugeoq |
+["m_wjmo4kvvg4"] | sent |
+["alicedev-23ca4ad7aef24153ad8affeae6737ad2"] |
+2026-09-19 18:47:19.068871 | 2026-09-19 10:47:20.375962
+
+74b9e3c7-a972-456c-aad3-aa1c2ca3c0fd | s_kukcnugeoq |
+["m_5rz5jk7h5d"] | sent |
+["alicedev-7393a313c65c488aa72402bbd1b31ce3"] |
+2026-09-19 18:51:20.757223 | 2026-09-19 10:51:21.621248
+
+c5787fbe-c25a-4dc9-ab7e-dd6666534834 | s_jcq3eoeqeu |
+["m_3cis44kzen"] | sent |
+["alicedev-431ca48fcd2b433795b9a41e41f2177c"] |
+2026-09-19 18:57:29.809548 | 2026-09-19 10:57:34.877495
+
+Interpretation: all three agent replies reached the Telegram platform sender
+path with state=sent and a platform_message_id. The separate Telegram sync
+transcript in 50-telegram-export.yaml proves receipt in the DM.
+
+3. requirements row
+-------------------
+4 | telegram:FriendMessage:865341181 | s_kukcnugeoq |
+telegram:865341181 | KunoriHaruka |
+希望 OpenAlice 支持中文界面，并能切换语言 | [] | open |
+2026-09-19 18:47:08.289277
+
+4. paseo/omp pending -> consumed
+---------------------------------
+Primary session JSONL:
+/home/paseo/.omp/agent/sessions/--workspace-alicedev--/2026-09-19T10-47-06-923Z_01a0b946-e7ab-77df-8c0a-813f75fee805.jsonl
+  pending:  session=s_kukcnugeoq msg=m_wjmo4kvvg4 timestamp=2026-09-19T10:47:07.337Z
+  consumed: msgs=[m_wjmo4kvvg4] reply_id=ba6549aa-e952-4b87-9738-2ea636ddddb4 timestamp=2026-09-19T10:47:20.568Z
+  pending:  session=s_kukcnugeoq msg=m_5rz5jk7h5d timestamp=2026-09-19T10:51:15.826Z
+  consumed: msgs=[m_5rz5jk7h5d] reply_id=74b9e3c7-a972-456c-aad3-aa1c2ca3c0fd timestamp=2026-09-19T10:51:21.663Z
+
+Issue session JSONL:
+/home/paseo/.omp/agent/sessions/--workspace-openalice--/2026-09-19T10-57-01-972Z_01a0b94f-fc14-7779-a8d4-6e69366835b9.jsonl
+  pending:  session=s_jcq3eoeqeu msg=m_3cis44kzen timestamp=2026-09-19T10:57:02.413Z
+  consumed: msgs=[m_3cis44kzen] reply_id=c5787fbe-c25a-4dc9-ab7e-dd6666534834 timestamp=2026-09-19T10:57:34.926Z
+
+5. AstrBot Telegram adapter log excerpts
+-----------------------------------------
+[18:42:51.852] [Core] [INFO] [telegram.tg_adapter:255]: Telegram Platform Adapter is running.
+[18:46:59.380] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: /需求 希望 OpenAlice 支持中文界面，并能切换语言
+[18:51:14.516] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: /继续 s_kukcnugeoq 补充：优先支持简体中文
+[18:51:37.255] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: /需求列表
+[18:53:24.434] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: /链接 s_kukcnugeoq
+[18:56:46.616] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: https://github.com/TraderAlice/OpenAlice/issues/1536
+[18:58:06.770] [Core] [INFO] [core.event_bus:74]: [default] [telegram(telegram)] KunoriHaruka/865341181: /收藏
+
+6. Link-command defect cross-check
+----------------------------------
+`/链接 s_kukcnugeoq` was sent at 2026-09-19T10:53:24Z and no Telegram
+reply arrived during the run. A read-only `tokens_issued` query for
+session_ref=s_kukcnugeoq returned zero rows. The running AstrBot container's
+rendered config had admin_users=['webchat:astrbot']; the host rendered config
+and deploy/.env had the intended telegram:865341181 entry, so the container
+config was stale (the init-volume copy had not been refreshed). No deployment
+or source change was made during this evidence run.

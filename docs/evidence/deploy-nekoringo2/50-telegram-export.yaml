@@ -1,0 +1,257 @@
+- id: 2
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9570
+  sender_id: 865341181
+  sender_name: はるか
+  content: /alicedev
+  timestamp: '2026-09-19T10:43:21+00:00'
+  raw_json: null
+- id: 1
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9571
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 'alicedev 可用指令：
+
+    /帮我调查 — 调查一个问题并直接回复，或生成 Markdown 调查报告
+
+    /需求 — 记录群友需求并交给 AI 分析（别名：/req）
+
+    /继续 — 向已有会话补充内容并唤醒 AI 继续分析（别名：/continue）
+
+    /收藏 — 收藏一条引用消息（可包含图片）
+
+    /收藏夹 — 查看当前聊天的收藏夹
+
+    /需求列表 — 查看当前聊天的需求列表
+
+    /链接 [管理员] — 为会话生成一次性工作区分享链接（别名：/link）
+
+    /解读 — 预取并解读 GitHub Issue 或 Pull Request（别名：/interpret）
+
+    /归档 [管理员] — 归档一个 paseo 会话（别名：/archive）
+
+    /alicedev — 显示 alicedev 指令和 Prompt 模板
+
+
+    Prompt 模板：
+
+    ⦁ github-issue · 链接触发：github_issue：读取 GitHub Issue，提炼背景、现状、风险与可执行建议
+
+    ⦁ github-pr · 链接触发：github_pr：读取 GitHub Pull Request，评估改动、风险与验证缺口
+
+    ⦁ investigate · /帮我调查：调查一个问题并直接回复，或生成 Markdown 调查报告
+
+    ⦁ requirement · /需求（别名：/req）：记录群友需求并交给 AI 分析'
+  timestamp: '2026-09-19T10:43:23+00:00'
+  raw_json: null
+- id: 5
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9572
+  sender_id: 865341181
+  sender_name: はるか
+  content: /alicedev
+  timestamp: '2026-09-19T10:46:38+00:00'
+  raw_json: null
+- id: 8
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9573
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 'alicedev 可用指令：
+
+    /帮我调查 — 调查一个问题并直接回复，或生成 Markdown 调查报告
+
+    /需求 — 记录群友需求并交给 AI 分析（别名：/req）
+
+    /继续 — 向已有会话补充内容并唤醒 AI 继续分析（别名：/continue）
+
+    /收藏 — 收藏一条引用消息（可包含图片）
+
+    /收藏夹 — 查看当前聊天的收藏夹
+
+    /需求列表 — 查看当前聊天的需求列表
+
+    /链接 [管理员] — 为会话生成一次性工作区分享链接（别名：/link）
+
+    /解读 — 预取并解读 GitHub Issue 或 Pull Request（别名：/interpret）
+
+    /归档 [管理员] — 归档一个 paseo 会话（别名：/archive）
+
+    /alicedev — 显示 alicedev 指令和 Prompt 模板
+
+
+    Prompt 模板：
+
+    ⦁ github-issue · 链接触发：github_issue：读取 GitHub Issue，提炼背景、现状、风险与可执行建议
+
+    ⦁ github-pr · 链接触发：github_pr：读取 GitHub Pull Request，评估改动、风险与验证缺口
+
+    ⦁ investigate · /帮我调查：调查一个问题并直接回复，或生成 Markdown 调查报告
+
+    ⦁ requirement · /需求（别名：/req）：记录群友需求并交给 AI 分析'
+  timestamp: '2026-09-19T10:46:40+00:00'
+  raw_json: null
+- id: 12
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9574
+  sender_id: 865341181
+  sender_name: はるか
+  content: /需求 希望 OpenAlice 支持中文界面，并能切换语言
+  timestamp: '2026-09-19T10:46:59+00:00'
+  raw_json: null
+- id: 17
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9575
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 已创建 s_kukcnugeoq
+  timestamp: '2026-09-19T10:47:09+00:00'
+  raw_json: null
+- id: 23
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9576
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: '理解：给 OpenAlice 加中文界面，并支持语言切换。
+
+
+    模糊点：简体还是繁体也要？范围是全 UI 还是部分页面？切换是手动按钮还是跟随系统？
+
+
+    可行性：可行，属常规 i18n 改造。若现有文案硬编码，需先抽 key + 接 i18n 框架 + 中文语言包 + 切换持久化，工作量取决于硬编码规模；替代方案可先只汉化核心页面、边角先机翻占位。
+
+
+    需补充：1）简体/繁体？2）优先汉化哪些页面？3）默认语言和切换入口放哪里？4）是否接受社区协作翻译？'
+  timestamp: '2026-09-19T10:47:20+00:00'
+  raw_json: null
+- id: 30
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9577
+  sender_id: 865341181
+  sender_name: はるか
+  content: /继续 s_kukcnugeoq 补充：优先支持简体中文
+  timestamp: '2026-09-19T10:51:14+00:00'
+  raw_json: null
+- id: 39
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9578
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 已转达至 s_kukcnugeoq
+  timestamp: '2026-09-19T10:51:16+00:00'
+  raw_json: null
+- id: 38
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9579
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: '收到补充，更新下理解：OpenAlice 优先支持简体中文界面，并可切换语言，简体明确了，歧义收窄了。
+
+
+    可行性：可行，仍是常规 i18n 改造：抽文案 key + 接 i18n 框架 + 简中语言包 + 切换入口与持久化（localStorage/用户配置）。范围取决于硬编码规模，建议先汉化核心页面。
+
+
+    还需确认 3 点：1）优先汉化哪些页面？2）默认语言跟随系统还是默认简中，切换入口放哪里？3）是否接受社区协作翻译/校对？'
+  timestamp: '2026-09-19T10:51:21+00:00'
+  raw_json: null
+- id: 48
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9580
+  sender_id: 865341181
+  sender_name: はるか
+  content: /需求列表
+  timestamp: '2026-09-19T10:51:37+00:00'
+  raw_json: null
+- id: 59
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9581
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: ''
+  timestamp: '2026-09-19T10:51:43+00:00'
+  raw_json: null
+- id: 73
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9582
+  sender_id: 865341181
+  sender_name: はるか
+  content: /链接 s_kukcnugeoq
+  timestamp: '2026-09-19T10:53:24+00:00'
+  raw_json: null
+- id: 125
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9583
+  sender_id: 865341181
+  sender_name: はるか
+  content: https://github.com/TraderAlice/OpenAlice/issues/1536
+  timestamp: '2026-09-19T10:56:46+00:00'
+  raw_json: null
+- id: 139
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9584
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 已创建 s_jcq3eoeqeu
+  timestamp: '2026-09-19T10:57:03+00:00'
+  raw_json: null
+- id: 154
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9585
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: ''
+  timestamp: '2026-09-19T10:57:34+00:00'
+  raw_json: null
+- id: 170
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9586
+  sender_id: 865341181
+  sender_name: はるか
+  content: /收藏
+  timestamp: '2026-09-19T10:58:06+00:00'
+  raw_json: null
+- id: 187
+  platform: telegram
+  chat_id: 8794402927
+  chat_name: RIRI OuO
+  msg_id: 9587
+  sender_id: 8794402927
+  sender_name: RIRI OuO
+  content: 用法：/收藏（请引用一条消息后再发送）
+  timestamp: '2026-09-19T10:58:07+00:00'
+  raw_json: null
