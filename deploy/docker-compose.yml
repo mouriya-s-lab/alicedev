@@ -24,6 +24,20 @@ services:
     volumes:
       - reports:/reports
 
+  # AstrBot rewrites cmd_config.json atomically (temp file + rename), which a
+  # read-only single-file bind mount cannot survive (EBUSY). Seed the rendered
+  # configs into the data volume instead; every `up` re-applies the render.
+  astrbot-init:
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+    platform: linux/amd64
+    container_name: alicedev-astrbot-init
+    restart: "no"
+    command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/cmd_config.json /data/cmd_config.json && cp /seed/alicedev_config.json /data/config/alicedev_config.json"]
+    volumes:
+      - astrbot_data:/data
+      - ./astrbot/cmd_config.rendered.json:/seed/cmd_config.json:ro
+      - ./astrbot/alicedev_config.rendered.json:/seed/alicedev_config.json:ro
+
   caddy:
     image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
     platform: linux/amd64
@@ -103,13 +117,13 @@ services:
       - astrbot_data:/AstrBot/data
       - ../bot:/AstrBot/data/plugins/alicedev
       - ../templates:/AstrBot/alicedev-templates
-      - ./astrbot/cmd_config.rendered.json:/AstrBot/data/cmd_config.json:ro
-      - ./astrbot/alicedev_config.rendered.json:/AstrBot/data/config/alicedev_config.json:ro
       - reports:/srv/alicedev/reports
     networks: [internal]
     depends_on:
       t2i:
         condition: service_healthy
+      astrbot-init:
+        condition: service_completed_successfully
     expose: ["6200"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3); raise SystemExit(0 if r.status == 200 else 1)"]
