@@ -1,0 +1,21 @@
+# Harness build target evidence
+
+Using the integrated BridgeCore harness source:
+
+```text
+make harness
+cd harness && npm ci && npm run build
+
+added 143 packages, and audited 144 packages in 11s
+found 0 vulnerabilities
+
+> build
+> node build.mjs
+
+  dist/omp-extension/index.js  14.3kb
+
+⚡ Done in 10ms
+```
+
+The generated dist directory contained the extension bundle and executable reply-cli.
+Dist is gitignored and was not committed by this slice.

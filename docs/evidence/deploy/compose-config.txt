@@ -1,0 +1,31 @@
+# Compose config evidence
+
+Command:
+
+```text
+docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml config --quiet
+docker compose --env-file deploy/.env.example -f deploy/docker-compose.yml --profile build config --quiet
+```
+
+Observed:
+
+```text
+both commands exited 0 with no diagnostics
+```
+
+Rendered service inspection (`config --profile build --format json`) observed:
+
+```text
+services astrbot,caddy,gateway,paseo,paseo-base,reports-init,t2i
+caddy ports=80,443; networks=edge,internal
+gateway ports=[]; networks=internal
+astrbot ports=127.0.0.1:6185->6185; networks=internal
+t2i ports=[]; networks=internal
+paseo ports=[]; networks=internal
+paseo hostnames=paseo,alicedev.237575.xyz,localhost
+paseo internal api=http://astrbot:6200 with ALICEDEV_INTERNAL_TOKEN from env
+gateway reports mount target=/srv/alicedev/reports/_published read_only=true volume.subpath=_published
+```
+
+This directly covers example-env interpolation, the build-only Arch base service, the
+required public/internal port boundary, and the reports read-only mount.

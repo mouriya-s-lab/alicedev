@@ -1,0 +1,35 @@
+# nekoringo2 preflight and pinned image evidence
+
+Command:
+
+```text
+ssh nekoringo2 'mkdir -p /srv/alicedev; hostname; uname -m; docker version --format "client={{.Client.Version}} server={{.Server.Version}}"; docker compose version; ss -tlnp | grep -E ":(80|443)\\b" || true'
+```
+
+Observed:
+
+```text
+Nekoringo-Test
+x86_64
+client=29.8.1 server=29.8.1
+Docker Compose version v5.5.1
+listeners
+```
+
+The final `listeners` section had no 80/443 rows.
+
+Pinned pulls all completed successfully:
+
+```text
+docker.io/library/caddy@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+docker.io/soulter/astrbot@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf
+docker.io/soulter/astrbot-t2i-service@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e
+```
+
+Digest-only image inspection on the host returned:
+
+```text
+sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0 [caddy@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0]
+sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf [soulter/astrbot@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf]
+sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e [soulter/astrbot-t2i-service@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e]
+```

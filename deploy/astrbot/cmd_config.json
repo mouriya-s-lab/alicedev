@@ -1,0 +1,27 @@
+{
+  "dashboard": {
+    "enable": true,
+    "username": "astrbot",
+    "host": "0.0.0.0",
+    "port": 6185
+  },
+  "platform": [
+    {
+      "id": "telegram",
+      "type": "telegram",
+      "enable": true,
+      "telegram_token": "${TELEGRAM_BOT_TOKEN}",
+      "telegram_command_register": true,
+      "telegram_command_auto_refresh": true,
+      "telegram_polling_restart_delay": 5.0
+    },
+    {
+      "id": "webchat",
+      "type": "webchat",
+      "enable": true
+    }
+  ],
+  "t2i_strategy": "remote",
+  "t2i_endpoint": "http://t2i:8999",
+  "plugin_set": ["*"]
+}
