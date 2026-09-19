@@ -1,79 +1,62 @@
-# 53 — `/链接` retry after runtime config repair (Telegram, @ririOuObot)
+# 53 — One-time link retry and preview-safe consumption
 
-Follows `50-telegram-e2e.md`, whose only FAIL was `/链接`. Root cause: the running
-AstrBot container had loaded a stale in-volume config
-(`/AstrBot/data/config/alicedev_config.json` → `admin_users=['webchat:astrbot']`),
-so `telegram:865341181` was not recognized as admin and the dispatcher silently
-denied `/链接`. Host `deploy/.env` and the host rendered config already contained
-`telegram:865341181`; only the volume copy was stale, because the previous change
-was applied with `docker compose restart`, which does NOT re-run the `astrbot-init`
-one-shot that seeds the volume config.
+Observed production run (UTC). This replaces the earlier retry note, which
+attributed the failure to a stale administrator configuration. The final
+runtime evidence identifies a different root cause: the old one-time-link
+route consumed its token on `GET`, so a Telegram preview fetch could spend the
+link before the operator opened it in a browser.
 
-## Runtime config repair (no `compose down`)
+No token value or one-time URL is recorded here.
 
-```
-cd /srv/alicedev
-C="docker compose -f deploy/docker-compose.yml --env-file deploy/.env"
-make render-config                       # regenerate rendered config from .env
-grep -c telegram:865341181 deploy/astrbot/alicedev_config.rendered.json   # -> 1
-$C up -d --force-recreate --no-deps astrbot-init   # re-run seed one-shot
-$C restart astrbot                                  # reload volume config
-```
+## Root cause and deployed contract
 
-Verification inside the container after restart:
+The failed behavior was a request-method error. The old route treated the
+preview `GET` as the one-time use. The Telegram preview `GET` therefore
+consumed the token before the real browser request. That explanation is the
+root-cause diagnosis established by the old failure and the successful
+request sequence below; the token itself is intentionally not reproduced.
 
-```
-docker exec alicedev-astrbot grep -o telegram:865341181 \
-  /AstrBot/data/config/alicedev_config.json
-# -> telegram:865341181     (in-volume config now includes the telegram admin)
+The deployed route is now preview-safe: `GET` and `HEAD` return the HTML
+preview without consuming the one-time link, and `POST` performs the single
+consuming transition. The live run directly exercised `GET` and `POST`; the
+`HEAD` behavior is the deployed route contract, not a separate request claimed
+as runtime evidence in this note.
 
-docker logs alicedev-astrbot | tail
-# [Core] [INFO] [alicedev.main:184]: alicedev initialized: 10 commands, 4 templates
-# [Core] [INFO] [telegram.tg_adapter:255]: Telegram Platform Adapter is running.
-```
+## Live request proof — PASS
 
-## `/链接` retry — PASS
+The gateway request log and the Telegram/browser observations showed this
+ordered sequence:
 
-```
-tg send ririOuObot '/链接 s_kukcnugeoq'      # -> outgoing Telegram msg 9588 @ 12:45:49Z
-tg sync ririOuObot
-tg recent --chat 'RIRI OuO' --limit 4 --yaml
-```
+1. **21:24:40** — the gateway issued a fresh link in response to the
+   `/链接` flow. The corresponding Telegram delivery was message **9604**;
+   its one-time URL is redacted.
+2. **21:24:42** — Telegram preview `GET` returned **200**. The link was still
+   available after this preview request; it was not consumed.
+3. **21:25:16** — the real browser `GET` returned **200**, the consuming
+   `POST` returned **303**, and the redirected destination `GET` returned
+   **200**. The browser displayed the running status page and then opened the
+   actual embedded Issue #1536 workspace through `进入会话`.
+4. A separate browser replay of the same one-time link was denied with
+   `链接无效、已使用或已过期。`.
 
-Bot reply (msg 9589 @ 2026-09-19T12:45:52Z), one-time URL redacted:
+This sequence proves the intended boundary: preview traffic can render the
+link without spending it, while one browser use consumes it exactly once.
+Screenshots **[`61-link-browser-open.png`](61-link-browser-open.png)** and
+**[`62-link-session-open.png`](62-link-session-open.png)** are the rendered
+landing page and embedded workspace from the successful browser path.
 
-```
-@KunoriHaruka https://alicedev.237575.xyz/t/<redacted>
-```
+## Reproducible observation procedure
 
-The one-time URL was NOT opened (single-use; opening would consume it).
+1. Trigger `/链接` for the current conversation and record only the Telegram
+   message ID; redact the returned one-time URL.
+2. Observe the preview request in the gateway log. Confirm `GET` is **200**
+   and that the link remains usable.
+3. Open the redacted link once in a fresh browser session. Confirm the
+   `GET`/**200** → `POST`/**303** → destination `GET`/**200** sequence, the
+   status page, and the embedded conversation reached by `进入会话`.
+4. Attempt one replay in a separate browser session. Confirm the explicit
+   invalid/used/expired response.
 
-### Server cross-check — `tokens_issued` audit row written
-
-Queried a copy of the DuckDB (`alicedev.duckdb` + `.wal`; the live process holds a
-write lock, and the just-written row lives in the WAL sidecar):
-
-```
-count = 7
-token_id   = t_717ca23d9ec3447ab599f7fc4ced8023
-session_ref= s_kukcnugeoq
-user_key   = telegram:865341181        # admin recipient
-issued_by  = telegram:865341181        # admin issuer
-target     = /h/srv_rAoczNBNKn6i/workspace/wks_7e243c7a9c97a5b7
-             ?open=agent%3Af85f2753-fbdd-4db0-8d9f-c2d873668887&embed=1
-issued_at  = 2026-09-19 12:45:50
-expires_at = 2026-09-19 18:45:50        # 6h TTL (_TOKEN_TTL_S = 21600)
-```
-
-`_handle_links` order is `gateway.issue_token` → `_record_token` → `_send_link`
-(all sequential in one `try`), so the delivered URL implies the audit row was
-written; the row above confirms it.
-
-## Result
-
-Telegram real-platform E2E is now **PASS on all paths**, including `/链接`. The
-`50-telegram-e2e.md` FAIL was a runtime-config staleness (volume seed not re-run on
-`restart`), not a code defect — no source or committed config changed. The
-operational lesson (`restart` reuses the stale in-volume config; use
-`up -d --force-recreate --no-deps astrbot-init` + `restart astrbot`, or
-`up -d --force-recreate astrbot`) is already documented in the runbook.
+The evidence files are the two screenshots cited above plus the gateway
+request log used for the timestamp and status-code correlation. No raw token,
+share URL, credential, or secret is included in this document.
