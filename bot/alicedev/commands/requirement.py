@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 from typing import TYPE_CHECKING
 
 from alicedev.commands.registry import CommandSpec
-from alicedev.templates.registry import ChatVar, QuotedVar, SenderVar, TemplateVars
+from alicedev.templates.registry import (
+    ChatVar,
+    Command,
+    QuotedVar,
+    SenderVar,
+    TemplateVars,
+)
 
 if TYPE_CHECKING:
     from alicedev.commands.context import CommandContext, Services
@@ -40,21 +47,22 @@ def _chat_name(ctx: "CommandContext") -> str:
     return ctx.chat_key
 
 
-async def _handle_requirement(ctx: "CommandContext") -> None:
+async def _handle_template(
+    ctx: "CommandContext", *, template_name: str, command_name: str
+) -> None:
     services = ctx.services
-    template = services.templates.by_command("需求")
+    template = services.templates.by_name(template_name)
     if template is None:
-        await ctx.reply_text("需求模板缺失，请检查部署。")
+        await ctx.reply_text("Prompt 模板缺失，请检查部署。")
         return
     if not ctx.args.strip():
-        await ctx.reply_text("用法：/需求 <内容>")
+        await ctx.reply_text(f"用法：/{command_name} <内容>")
         return
 
-    vars = build_template_vars(ctx)
     record = await services.sessions.create_and_inject(
         chat_key=ctx.chat_key,
         template=template,
-        vars=vars,
+        vars=build_template_vars(ctx),
         created_by=ctx.user_key,
         platform_message_id=ctx.event.message_obj.message_id,
         sender_key=ctx.user_key,
@@ -73,12 +81,20 @@ async def _handle_requirement(ctx: "CommandContext") -> None:
 
 
 def register(registry: "CommandRegistry", services: "Services") -> None:
-    registry.register(
-        CommandSpec(
-            name="需求",
-            aliases=("req",),
-            description="记录群友需求并交给 AI 分析",
-            admin_only=False,
-            handler=_handle_requirement,
+    for template in services.templates.all():
+        if not isinstance(template.trigger, Command):
+            continue
+        registry.register(
+            CommandSpec(
+                name=template.trigger.name,
+                aliases=template.trigger.aliases,
+                description=template.description,
+                admin_only=False,
+                handler=partial(
+                    _handle_template,
+                    template_name=template.name,
+                    command_name=template.trigger.name,
+                ),
+            )
         )
-    )
+

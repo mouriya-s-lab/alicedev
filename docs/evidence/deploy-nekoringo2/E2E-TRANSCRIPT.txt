@@ -1,0 +1,162 @@
+alicedev deployed WebChat E2E evidence (nekoringo2)
+====================================================
+
+Scope
+-----
+Real AstrBot WebChat path through the deployed stack. Share-link browser opening and
+report rendering were intentionally not run (owned by the next slice). The dashboard
+was reached through the supervised local SSH tunnel; credentials are omitted.
+
+1. Dashboard, WebChat, and help
+--------------------------------
+Tunnel: local 16185 -> nekoringo2 127.0.0.1:6185.
+Browser path: AstrBot dashboard -> Chat (#/chat), user webchat:astrbot.
+
+The first `/alicedev` response is captured in `01-help.png` and contains 9 command
+entries plus 4 Prompt templates:
+  /需求, /继续, /收藏, /收藏夹, /需求列表, /链接, /解读, /归档, /alicedev
+  templates: github-issue, github-pr, investigate, requirement
+
+During verification, the deployed source was corrected so every command-triggered
+Prompt template is registered from the template directory. The post-fix help proof
+is `07-help-after-fix.png`; it now visibly includes `/帮我调查` as a command and
+still lists all four templates. The internal status proof is in
+`15-status-after-fix.json` (10 commands, 4 templates).
+
+2. Primary requirement session and first AI reply
+-------------------------------------------------
+WebChat input:
+  `/需求 希望支持深色模式，并跟随系统设置`
+
+WebChat confirmation and screenshot:
+  session_ref = s_6qwymgt26a
+  screenshot = `02-requirement-created.png`
+
+Paseo MCP correlation:
+  agent_id = 802b71a8-bc83-4408-9738-e7fea7663d34
+  list_agents returned labels.alicedev = s_6qwymgt26a
+  get_agent_status returned idle
+  full redacted response = `03-mcp-agent-status.json`
+
+Matching omp JSONL:
+  `/home/paseo/.omp/agent/sessions/--workspace-alicedev--/2026-09-19T04-33-41-336Z_01a0b7f1-05d8-7447-a841-853b368eb220.jsonl`
+  exact pending/consumed lines = `04-omp-events.txt`
+
+First pair:
+  alicedev.pending  msg=m_klobqvupiv  2026-09-19T04:33:41.781Z
+  alicedev.consumed msg=m_klobqvupiv  reply_id=fc06faea-38a3-47d8-9dbc-1b41a3e15238  2026-09-19T04:33:57.455Z
+
+Delivery proof (`05-first-delivery.json`):
+  reply_id=fc06faea-38a3-47d8-9dbc-1b41a3e15238
+  state=sent
+  platform_message_ids=[alicedev-61a7106ac5ce4a0495783c7566405f0b]
+
+AstrBot ChatUI did not render the out-of-band AI message in the visible thread,
+matching spike-results.md §8.2. Screenshot: `03-ai-reply-ui-gap.png`.
+The durable platform fallback is `06-platform-history.txt`, row id=5:
+  platform_id=webchat
+  user_id=<WebChat conversation UUID; see raw file for exact value>
+  sender_id=bot
+  created_at=2026-09-19 04:33:57.400288
+  llm_checkpoint_id=NULL
+  content contains the AI reply beginning “收到，理解你想要 OpenAlice 前端支持深色主题...”
+(The raw evidence file retains the exact UUID and JSON content; no credentials.)
+
+3. Continuation and second pair
+--------------------------------
+WebChat input:
+  `/继续 s_6qwymgt26a 补充：也要支持定时自动切换`
+
+WebChat confirmation: `已转达至 s_6qwymgt26a`; screenshot=`04-continuation.png`.
+The same omp JSONL has a second pair in `04-omp-events.txt`:
+  alicedev.pending  msg=m_s4gjprm6uh  2026-09-19T04:38:57.403Z
+  alicedev.consumed msg=m_s4gjprm6uh  reply_id=bbfbff9f-3f73-4482-af91-a6c2be27e10e  2026-09-19T04:39:09.655Z
+
+4. Requirement list card and favorites usage
+---------------------------------------------
+`/需求列表` returned a card image:
+  WebChat screenshot: `05-requirement-list-card.png`
+  generated PNG copied from AstrBot attachment: `05-requirement-list-card-generated.png`
+  source attachment filename: 20260919123944260_ca80.png
+  platform history metadata identified attachment_id=0b0db362-2566-4312-91b0-11535bbbaff7
+
+`/收藏` without a quoted message returned exactly:
+  `用法：/收藏（请引用一条消息后再发送）`
+Screenshot: `06-favorites-usage.png`.
+
+5. README investigation and report fallback
+--------------------------------------------
+Initial pre-fix attempt at `/帮我调查 OpenAlice 仓库的 README 主要讲了什么，写一份简短报告`
+returned the exact AstrBot fallback:
+  `LLM 请求失败：未找到任何可用的对话模型（提供商）。请先在 WebUI 中配置并启用可用模型。`
+Root cause was missing generic registration of command-trigger templates.
+
+After the fix and AstrBot restart, the same real WebChat request created:
+  session_ref = s_3sofon7jse
+  agent_id = ac124ec7-9403-4220-8541-bbdbe7eb20b7
+  matching omp session = `/home/paseo/.omp/agent/sessions/--workspace-openalice--/2026-09-19T04-47-40-112Z_01a0b7fd-d250-77e0-9c41-0dec900a2041.jsonl`
+  omp events/reply evidence is in `12-investigation-agent-status.json` and the matching
+  source JSONL was inspected; the AI read `/workspace/openalice/README.md` and called
+  chat_reply with a text-only README summary.
+
+The out-of-band AI text was delivered with state=sent (reply_id
+b6c756ef-673b-4b36-b173-7d9607eedecb), but is not visible in ChatUI. The direct
+file fallback requested by the acceptance was then executed:
+  - root created/chowned `/srv/alicedev/reports/s_3sofon7jse/` because the mounted
+    reports root is root:root 0755; the actual demo.md content was written in the
+    paseo container as user paseo (uid 1000).
+  - content includes a title, Markdown table, ```python``` block, ```mermaid```
+    flowchart, and CJK text.
+  - POST /v1/reply with msgs=[] and kind=file succeeded with HTTP 200.
+  - full API response is in `09-report-file-reply.json`.
+  - report_url (also sent to Main via hub) is:
+    https://alicedev.237575.xyz/_alicedev/r/r_qnfekywx5qu7zuutats2kl3cvt/demo.md
+  - delivery rows, including the file reply, are in `10-investigation-deliveries.json`.
+  - published report row is in `11-report-row.json`.
+  - `09-investigation-ui.png` records that ChatUI still did not render the active
+    out-of-band file/text replies; this is the known AstrBot checkpoint-thread gap.
+
+6. Admin share link
+--------------------
+The first link attempts exposed two exact deployment observations:
+  - `/链接 s_6qwymgt26a` after an AstrBot restart returned
+    `当前群没有可分享的活动会话。` because the new WebChat conversation had a
+    different generated chat key than the pre-restart session.
+  - `/链接 s_3sofon7jse` found the session but returned
+    `该会话尚未准备好分享。` because production MCP create/list responses omitted
+    serverId, leaving sessions.server_id NULL.
+
+Paseo `GET /api/status` returned serverId=srv_rAoczNBNKn6i. The deployed fix now
+caches this daemon serverId when MCP create/list lacks it. A fresh same-chat
+requirement session proved the fixed path:
+  share session_ref = s_c4n74swnml
+  share agent_id = fd91ba52-803e-4374-b2e1-904b26575cce
+  workspace_id = wks_fb6d0ff08f05d663
+  server_id = srv_rAoczNBNKn6i
+  `/链接 s_c4n74swnml` returned a full one-time URL in WebChat.
+The screenshot `13-share-link.png` redacts the single-use token; the full URL was
+sent only to Main through hub and was NOT opened.
+Session identifiers are recorded in `14-share-session.json`.
+
+Fixes applied and deployed
+---------------------------
+1. `bot/alicedev/commands/requirement.py`: generic registration now iterates
+   `services.templates.all()`, filters `Command` triggers, and registers each
+   frontmatter command/aliases/description with a parameterized template handler.
+   Existing `record: requirement` behavior remains intact; `/需求` post-fix proof is
+   `08-requirement-after-fix.png` (session s_f6lzvba45v).
+2. `bot/alicedev/paseo/mcp.py`: when MCP omits serverId, fetch/cache authenticated
+   `GET /api/status.serverId` and propagate it into AgentHandle/session persistence.
+
+Deployment actions: rsync each changed file to `/srv/alicedev/...` and restart
+`alicedev-astrbot`. One intermediate restart exposed and then fixed a missing
+`CommandSpec.description` argument; the final startup log reported
+`alicedev initialized: 10 commands, 4 templates`.
+
+Known gaps / out of scope
+-------------------------
+- WebChat ChatUI does not immediately render out-of-band `context.send_message`
+  rows with `llm_checkpoint_id=NULL`; delivery is proven by DuckDB/platform history.
+- Telegram adapter remains unauthorized as previously known; not part of this slice.
+- Share URL was not opened and report URL was not opened; browser share/report
+  rendering belongs to the next slice.

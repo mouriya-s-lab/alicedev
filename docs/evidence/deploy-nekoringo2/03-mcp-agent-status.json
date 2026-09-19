@@ -1,0 +1,145 @@
+{
+  "tool": "list_agents",
+  "result": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "agents_count=1\nagents_ids=802b71a8-bc83-4408-9738-e7fea7663d34\n\n{\n  \"agents\": [\n    {\n      \"id\": \"802b71a8-bc83-4408-9738-e7fea7663d34\",\n      \"shortId\": \"802b71a\",\n      \"title\": \"alicedev s_6qwymgt26a\",\n      \"provider\": \"omp-alicedev\",\n      \"model\": \"opencode-go/muse-spark-1.3-contributor\",\n      \"thinkingOptionId\": \"medium\",\n      \"effectiveThinkingOptionId\": \"medium\",\n      \"status\": \"idle\",\n      \"cwd\": \"/workspace/alicedev\",\n      \"createdAt\": \"2026-09-19T04:33:41.753Z\",\n      \"updatedAt\": \"2026-09-19T04:33:59.451Z\",\n      \"lastUserMessageAt\": \"2026-09-19T04:33:41.920Z\",\n      \"archivedAt\": null,\n      \"requiresAttention\": true,\n      \"attentionReason\": \"finished\",\n      \"attentionTimestamp\": \"2026-09-19T04:33:59.446Z\",\n      \"labels\": {\n        \"alicedev\": \"s_6qwymgt26a\"\n      }\n    }\n  ]\n}"
+        }
+      ],
+      "structuredContent": {
+        "agents": [
+          {
+            "id": "802b71a8-bc83-4408-9738-e7fea7663d34",
+            "shortId": "802b71a",
+            "title": "alicedev s_6qwymgt26a",
+            "provider": "omp-alicedev",
+            "model": "opencode-go/muse-spark-1.3-contributor",
+            "thinkingOptionId": "medium",
+            "effectiveThinkingOptionId": "medium",
+            "status": "idle",
+            "cwd": "/workspace/alicedev",
+            "createdAt": "2026-09-19T04:33:41.753Z",
+            "updatedAt": "2026-09-19T04:33:59.451Z",
+            "lastUserMessageAt": "2026-09-19T04:33:41.920Z",
+            "archivedAt": null,
+            "requiresAttention": true,
+            "attentionReason": "finished",
+            "attentionTimestamp": "2026-09-19T04:33:59.446Z",
+            "labels": {
+              "alicedev": "s_6qwymgt26a"
+            }
+          }
+        ]
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}
+{
+  "tool": "get_agent_status",
+  "result": {
+    "result": {
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"status\": \"idle\",\n  \"snapshot\": {\n    \"id\": \"802b71a8-bc83-4408-9738-e7fea7663d34\",\n    \"provider\": \"omp-alicedev\",\n    \"cwd\": \"/workspace/alicedev\",\n    \"workspaceId\": \"wks_d6a8fc4ce146e9fc\",\n    \"model\": \"opencode-go/muse-spark-1.3-contributor\",\n    \"thinkingOptionId\": \"medium\",\n    \"effectiveThinkingOptionId\": \"medium\",\n    \"runtimeInfo\": {\n      \"provider\": \"omp-alicedev\",\n      \"sessionId\": \"01a0b7f1-05d8-7447-a841-853b368eb220\",\n      \"model\": \"opencode-go/muse-spark-1.3-contributor\",\n      \"thinkingOptionId\": \"medium\",\n      \"modeId\": \"full\"\n    },\n    \"createdAt\": \"2026-09-19T04:33:41.753Z\",\n    \"updatedAt\": \"2026-09-19T04:33:59.451Z\",\n    \"lastUserMessageAt\": \"2026-09-19T04:33:41.920Z\",\n    \"status\": \"idle\",\n    \"activeTurn\": null,\n    \"capabilities\": {\n      \"supportsStreaming\": true,\n      \"supportsSessionPersistence\": true,\n      \"supportsSessionListing\": true,\n      \"supportsDynamicModes\": true,\n      \"supportsMcpServers\": false,\n      \"supportsReasoningStream\": true,\n      \"supportsToolInvocations\": true,\n      \"supportsRewindConversation\": true,\n      \"supportsRewindFiles\": false,\n      \"supportsRewindBoth\": false,\n      \"supportsNativePaseoTools\": true\n    },\n    \"currentModeId\": \"full\",\n    \"availableModes\": [\n      {\n        \"id\": \"full\",\n        \"label\": \"Full Access\",\n        \"description\": \"Launches OMP with yolo approval mode so tools run without prompts.\",\n        \"icon\": \"ShieldOff\",\n        \"colorTier\": \"dangerous\",\n        \"isUnattended\": true\n      },\n      {\n        \"id\": \"write\",\n        \"label\": \"Write Approval\",\n        \"description\": \"Launches OMP with write approval mode — reads are free, writes require approval.\",\n        \"icon\": \"ShieldAlert\",\n        \"colorTier\": \"moderate\"\n      },\n      {\n        \"id\": \"ask\",\n        \"label\": \"Always Ask\",\n        \"description\": \"Launches OMP with always-ask approval mode for write and exec tools.\",\n        \"icon\": \"ShieldCheck\",\n        \"colorTier\": \"safe\"\n      }\n    ],\n    \"features\": [],\n    \"pendingPermissions\": [],\n    \"persistence\": {\n      \"provider\": \"omp-alicedev\",\n      \"sessionId\": \"01a0b7f1-05d8-7447-a841-853b368eb220\",\n      \"nativeHandle\": \"/home/paseo/.omp/agent/sessions/--workspace-alicedev--/2026-09-19T04-33-41-336Z_01a0b7f1-05d8-7447-a841-853b368eb220.jsonl\",\n      \"metadata\": {\n        \"cwd\": \"/workspace/alicedev\",\n        \"model\": \"opencode-go/muse-spark-1.3-contributor\",\n        \"thinkingOptionId\": \"medium\",\n        \"modeId\": \"full\"\n      }\n    },\n    \"title\": \"alicedev s_6qwymgt26a\",\n    \"labels\": {\n      \"alicedev\": \"s_6qwymgt26a\"\n    },\n    \"lastUsage\": {\n      \"inputTokens\": 19923,\n      \"cachedInputTokens\": 38754,\n      \"outputTokens\": 858,\n      \"totalCostUsd\": 0.002241408,\n      \"contextWindowMaxTokens\": 1048576,\n      \"contextWindowUsedTokens\": 19880\n    },\n    \"requiresAttention\": true,\n    \"attentionReason\": \"finished\",\n    \"attentionTimestamp\": \"2026-09-19T04:33:59.446Z\"\n  }\n}"
+        }
+      ],
+      "structuredContent": {
+        "status": "idle",
+        "snapshot": {
+          "id": "802b71a8-bc83-4408-9738-e7fea7663d34",
+          "provider": "omp-alicedev",
+          "cwd": "/workspace/alicedev",
+          "workspaceId": "wks_d6a8fc4ce146e9fc",
+          "model": "opencode-go/muse-spark-1.3-contributor",
+          "thinkingOptionId": "medium",
+          "effectiveThinkingOptionId": "medium",
+          "runtimeInfo": {
+            "provider": "omp-alicedev",
+            "sessionId": "01a0b7f1-05d8-7447-a841-853b368eb220",
+            "model": "opencode-go/muse-spark-1.3-contributor",
+            "thinkingOptionId": "medium",
+            "modeId": "full"
+          },
+          "createdAt": "2026-09-19T04:33:41.753Z",
+          "updatedAt": "2026-09-19T04:33:59.451Z",
+          "lastUserMessageAt": "2026-09-19T04:33:41.920Z",
+          "status": "idle",
+          "activeTurn": null,
+          "capabilities": {
+            "supportsStreaming": true,
+            "supportsSessionPersistence": true,
+            "supportsSessionListing": true,
+            "supportsDynamicModes": true,
+            "supportsMcpServers": false,
+            "supportsReasoningStream": true,
+            "supportsToolInvocations": true,
+            "supportsRewindConversation": true,
+            "supportsRewindFiles": false,
+            "supportsRewindBoth": false,
+            "supportsNativePaseoTools": true
+          },
+          "currentModeId": "full",
+          "availableModes": [
+            {
+              "id": "full",
+              "label": "Full Access",
+              "description": "Launches OMP with yolo approval mode so tools run without prompts.",
+              "icon": "ShieldOff",
+              "colorTier": "dangerous",
+              "isUnattended": true
+            },
+            {
+              "id": "write",
+              "label": "Write Approval",
+              "description": "Launches OMP with write approval mode — reads are free, writes require approval.",
+              "icon": "ShieldAlert",
+              "colorTier": "moderate"
+            },
+            {
+              "id": "ask",
+              "label": "Always Ask",
+              "description": "Launches OMP with always-ask approval mode for write and exec tools.",
+              "icon": "ShieldCheck",
+              "colorTier": "safe"
+            }
+          ],
+          "features": [],
+          "pendingPermissions": [],
+          "persistence": {
+            "provider": "omp-alicedev",
+            "sessionId": "01a0b7f1-05d8-7447-a841-853b368eb220",
+            "nativeHandle": "/home/paseo/.omp/agent/sessions/--workspace-alicedev--/2026-09-19T04-33-41-336Z_01a0b7f1-05d8-7447-a841-853b368eb220.jsonl",
+            "metadata": {
+              "cwd": "/workspace/alicedev",
+              "model": "opencode-go/muse-spark-1.3-contributor",
+              "thinkingOptionId": "medium",
+              "modeId": "full"
+            }
+          },
+          "title": "alicedev s_6qwymgt26a",
+          "labels": {
+            "alicedev": "s_6qwymgt26a"
+          },
+          "lastUsage": {
+            "inputTokens": 19923,
+            "cachedInputTokens": 38754,
+            "outputTokens": 858,
+            "totalCostUsd": 0.002241408,
+            "contextWindowMaxTokens": 1048576,
+            "contextWindowUsedTokens": 19880
+          },
+          "requiresAttention": true,
+          "attentionReason": "finished",
+          "attentionTimestamp": "2026-09-19T04:33:59.446Z"
+        }
+      }
+    },
+    "jsonrpc": "2.0",
+    "id": 1
+  }
+}

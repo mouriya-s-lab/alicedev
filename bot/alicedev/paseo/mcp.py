@@ -48,10 +48,12 @@ def _map_status(raw: str | None) -> AgentStatus:
 class MCPPaseoControl(PaseoControl):
     def __init__(self, base_url: str, password: str, *, timeout_s: float = 60.0) -> None:
         # base_url is the daemon origin, e.g. http://paseo:6767
-        self._endpoint = base_url.rstrip("/") + "/mcp/agents"
+        self._base_url = base_url.rstrip("/")
+        self._endpoint = self._base_url + "/mcp/agents"
         self._password = password
         self._timeout = aiohttp.ClientTimeout(total=timeout_s)
         self._session: aiohttp.ClientSession | None = None
+        self._server_id: str | None = None
         self._rpc_id = 0
 
     async def connect(self) -> None:
@@ -62,6 +64,26 @@ class MCPPaseoControl(PaseoControl):
         if self._session is not None and not self._session.closed:
             await self._session.close()
         self._session = None
+
+    async def _server_id_from_status(self) -> str | None:
+        if self._server_id is not None:
+            return self._server_id
+        await self.connect()
+        assert self._session is not None
+        try:
+            async with self._session.get(
+                self._base_url + "/api/status",
+                headers={"Authorization": f"Bearer {self._password}"},
+            ) as resp:
+                if resp.status >= 400:
+                    return None
+                payload = await resp.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError):
+            return None
+        raw = payload.get("serverId") if isinstance(payload, dict) else None
+        if isinstance(raw, str) and raw:
+            self._server_id = raw
+        return self._server_id
 
     def _next_id(self) -> int:
         self._rpc_id += 1
@@ -141,10 +163,13 @@ class MCPPaseoControl(PaseoControl):
         agent_id = out.get("agentId")
         if not agent_id:
             raise PaseoError(f"create_agent returned no agentId: {out}")
+        server_id = str(out["serverId"]) if out.get("serverId") else None
+        if server_id is None:
+            server_id = await self._server_id_from_status()
         return AgentHandle(
             agent_id=str(agent_id),
             workspace_id=(str(out["workspaceId"]) if out.get("workspaceId") else None),
-            server_id=(str(out["serverId"]) if out.get("serverId") else None),
+            server_id=server_id,
         )
 
     async def find_by_label(self, session_ref: str) -> AgentHandle | None:
@@ -154,10 +179,13 @@ class MCPPaseoControl(PaseoControl):
         for agent in out.get("agents", []):
             labels = agent.get("labels") or {}
             if labels.get(LABEL_KEY) == session_ref:
+                server_id = str(agent["serverId"]) if agent.get("serverId") else None
+                if server_id is None:
+                    server_id = await self._server_id_from_status()
                 return AgentHandle(
                     agent_id=str(agent["id"]),
                     workspace_id=(str(agent["workspaceId"]) if agent.get("workspaceId") else None),
-                    server_id=(str(agent["serverId"]) if agent.get("serverId") else None),
+                    server_id=server_id,
                 )
         return None
 

@@ -1,0 +1,22 @@
+{
+  "reply_deliveries": [
+    {
+      "reply_id": "b6c756ef-673b-4b36-b173-7d9607eedecb",
+      "session_ref": "s_3sofon7jse",
+      "msgs": "[\"m_6uqe6lztkb\"]",
+      "state": "sent",
+      "platform_message_ids": "[\"alicedev-c930b2b2d1844d06bf2772bd37006e28\"]",
+      "created_at": "2026-09-19 12:47:59.810558",
+      "updated_at": "2026-09-19 04:48:01.986889"
+    },
+    {
+      "reply_id": "efe1c2e6-5840-4d5b-9653-5ca3cfa7a84b",
+      "session_ref": "s_3sofon7jse",
+      "msgs": "[]",
+      "state": "sent",
+      "platform_message_ids": "[\"alicedev-c8527eca62da48d5b8eb9d0cb8e25a81\"]",
+      "created_at": "2026-09-19 12:49:30.934438",
+      "updated_at": "2026-09-19 04:49:30.958626"
+    }
+  ]
+}
