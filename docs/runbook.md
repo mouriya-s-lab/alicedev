@@ -69,14 +69,15 @@ ssh nekoringo2 'for ref in caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b
 make harness
 git rev-parse HEAD
 git -C /Users/mouriya/Ext/code/paseo-alicedev rev-parse HEAD
-rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' /Users/mouriya/Ext/code/alicedev/ nekoringo2:/srv/alicedev/
+rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'src/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' /Users/mouriya/Ext/code/alicedev/ nekoringo2:/srv/alicedev/
 ssh nekoringo2 mkdir -p /srv/alicedev/src/paseo-alicedev && rsync -az --delete --exclude '.git/' --exclude 'node_modules/' /Users/mouriya/Ext/code/paseo-alicedev/ nekoringo2:/srv/alicedev/src/paseo-alicedev/
 ```
 
-说明：`deploy/.env` 和 `deploy/astrbot/*.rendered.json` 只存在于服务端，
-同步时排除，不会被 Mac 侧覆盖。升级时先在 Mac 检出审阅 commit，记下同步时刻的
-`git rev-parse HEAD`（即审计依据），再走同一组 rsync；不要把
-`src/paseo-alicedev` 当作可删除的 build cache。
+说明：`deploy/.env`、`deploy/astrbot/*.rendered.json` 和 `src/` 只存在于服务端，
+同步时必须排除：前两者不会被 Mac 侧覆盖；`src/` 不在 alicedev 检出里，缺少
+`--exclude 'src/'` 时 `--delete` 会把 `src/paseo-alicedev` 整个删掉（只需重跑第二条
+rsync 即可恢复，但要先补回排除）。升级时先在 Mac 检出审阅 commit，记下同步时刻的
+`git rev-parse HEAD`（即审计依据），再走同一组 rsync。
 
 ### 2.3 环境、渲染和构建
 
@@ -405,12 +406,21 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 
 1. AstrBot WebChat ChatUI 不渲染经 `context.send_message` 发送的带外回复：
    行已写入 `platform_message_history` 且 `reply_deliveries.state=sent`（后端投递
-   成功），只是 WebChat 前端不显示；真实 QQ/Telegram 平台可正常送达。
+   已证），只是 WebChat 前端不显示；QQ/Telegram 真实平台的送达尚未验证（见 2、3）。
 2. `.env` 中的 Telegram token 被 Telegram 拒绝为未授权：适配器保留配置但未验证
    通过。
 3. QQ onboarding 未完成，仍按 §7.1 执行。
+4. 未在生产逐一执行的指令：`/解读`、`/归档`、`/收藏夹`（仅确认已注册，单测覆盖）。
+5. 12 小时空闲 sweeper 未在生产观察到真实关闭事件；At 多人 fan-out 与 Reply 引用
+   只覆盖 WebChat 路径。
+6. 嵌入页刷新/前进后退修复（paseo-alicedev `6a59f442`）只在单一干净浏览器会话验证；
+   多标签页、断网重连、长时间会话未验证。分享 cookie 只观察到单次消费与重放 403，
+   未验证过期与跨浏览器行为。
+7. paseo-alicedev 的 pre-commit 因本机 mise 未信任仓库 `.mise.toml` 未执行（仅跑了
+   `host-runtime.test.ts` 72/72）。
+8. DNS 记录未纳入 IaC（§4）。
 
 ### 9.3 证据
 
-部署证据（含 E2E transcript、截图、`share-link-check.md`、`embed-verify.md`）在
-`docs/evidence/deploy-nekoringo2/`。
+部署证据（含 E2E transcript、截图、`share-link-check.md`、`embed-verify.md`、
+`embed-reply-sync.md`）在 `docs/evidence/deploy-nekoringo2/`。
