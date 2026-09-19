@@ -75,14 +75,16 @@ NapCat 的 `v4.18.28` digest 是 Docker Hub 的 `linux/amd64` manifest；Compose
 make harness
 git rev-parse HEAD
 git -C /Users/mouriya/Ext/code/paseo-alicedev rev-parse HEAD
-rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'src/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' /Users/mouriya/Ext/code/alicedev/ nekoringo2:/srv/alicedev/
+rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'src/' --exclude 'backups/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' /Users/mouriya/Ext/code/alicedev/ nekoringo2:/srv/alicedev/
 ssh nekoringo2 mkdir -p /srv/alicedev/src/paseo-alicedev && rsync -az --delete --exclude '.git/' --exclude 'node_modules/' /Users/mouriya/Ext/code/paseo-alicedev/ nekoringo2:/srv/alicedev/src/paseo-alicedev/
 ```
 
-说明：`deploy/.env`、`deploy/astrbot/*.rendered.json` 和 `src/` 只存在于服务端，
-同步时必须排除：前两者不会被 Mac 侧覆盖；`src/` 不在 alicedev 检出里，缺少
-`--exclude 'src/'` 时 `--delete` 会把 `src/paseo-alicedev` 整个删掉（只需重跑第二条
-rsync 即可恢复，但要先补回排除）。QQ 身份、NapCat 配置/插件和 AstrBot 数据都在
+说明：`deploy/.env`、`deploy/astrbot/*.rendered.json`、`src/` 和遗留
+`backups/` 目录只存在于服务端，同步时必须排除：前两者不会被 Mac 侧覆盖；
+`src/` 不在 alicedev 检出里，缺少 `--exclude 'src/'` 时 `--delete` 会把
+`src/paseo-alicedev` 整个删掉（只需重跑第二条 rsync 即可恢复，但要先补回排除）；
+缺少 `--exclude 'backups/'` 会删除旧版手册曾放在工作树内的备份。新备份统一写到
+工作树外的 `/root/alicedev-backups/`。QQ 身份、NapCat 配置/插件和 AstrBot 数据都在
 命名 Docker volumes（`alicedev_napcat_qq`、`alicedev_napcat_config`、
 `alicedev_napcat_plugins`、`alicedev_astrbot_data`）中，位于 `/srv/alicedev` 之外；
 因此 rsync `--delete` 不会触碰运行时身份。禁止把这些卷改为 `./napcat/*` 或其他
@@ -270,15 +272,17 @@ and `ALICEDEV_INTERNAL_TOKEN`; never change that container-to-container URL to
 - `alicedev_workspace` 与 `alicedev_reports`：agent 工作区、源报告和 `_published`。
 - `alicedev_caddy_data`：ACME 证书/账户状态；不要只备份 Caddyfile。
 
-示例（目标备份目录必须由 operator 保护，命令不打印卷内容）：
+备份必须写到同步工作树外的 `/root/alicedev-backups/`；`/srv/alicedev` 会被
+`rsync --delete` 收敛，不能承载唯一备份。示例先停写入者，再归档完整插件数据目录，
+因此 DuckDB 主文件与可能存在的 `.wal` 会保持同一时点（命令不打印卷内容）：
 
 ```bash
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml stop astrbot napcat paseo'
-ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_qq:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_qq-$(date +%Y%m%d%H%M%S).tgz -C /src .'
-ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_config:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_config-$(date +%Y%m%d%H%M%S).tgz -C /src .'
-ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_napcat_plugins:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/napcat_plugins-$(date +%Y%m%d%H%M%S).tgz -C /src .'
-ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_paseo_home:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 tar czf /dst/paseo_home-$(date +%Y%m%d%H%M%S).tgz -C /src .'
-ssh nekoringo2 'mkdir -p /srv/alicedev/backups && docker run --rm -v alicedev_astrbot_data:/src:ro -v /srv/alicedev/backups:/dst alpine:3.22 sh -c '\''tar czf /dst/duckdb-$(date +%Y%m%d%H%M%S).tgz -C /src plugin_data/alicedev/alicedev.duckdb'\''
+ssh nekoringo2 'mkdir -p /root/alicedev-backups && docker run --rm -v alicedev_napcat_qq:/src:ro -v /root/alicedev-backups:/dst alpine:3.22 tar czf /dst/napcat_qq-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /root/alicedev-backups && docker run --rm -v alicedev_napcat_config:/src:ro -v /root/alicedev-backups:/dst alpine:3.22 tar czf /dst/napcat_config-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /root/alicedev-backups && docker run --rm -v alicedev_napcat_plugins:/src:ro -v /root/alicedev-backups:/dst alpine:3.22 tar czf /dst/napcat_plugins-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /root/alicedev-backups && docker run --rm -v alicedev_paseo_home:/src:ro -v /root/alicedev-backups:/dst alpine:3.22 tar czf /dst/paseo_home-$(date +%Y%m%d%H%M%S).tgz -C /src .'
+ssh nekoringo2 'mkdir -p /root/alicedev-backups && docker run --rm -v alicedev_astrbot_data:/src:ro -v /root/alicedev-backups:/dst alpine:3.22 sh -c '\''tar czf /dst/alicedev-plugin-data-$(date +%Y%m%d%H%M%S).tgz -C /src plugin_data/alicedev'\'''
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml start paseo napcat astrbot'
 ```
 

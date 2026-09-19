@@ -44,5 +44,5 @@ logs: test-env
 
 deploy: harness render-config
 	ssh nekoringo2 'mkdir -p /srv/alicedev'
-	rsync -az --exclude '.git/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' ./ nekoringo2:/srv/alicedev/
+	rsync -az --delete --exclude '.git/' --exclude 'node_modules/' --exclude 'harness/node_modules/' --exclude 'src/' --exclude 'backups/' --exclude 'deploy/.env' --exclude 'deploy/astrbot/*.rendered.json' ./ nekoringo2:/srv/alicedev/
 	ssh nekoringo2 'cd /srv/alicedev && make build && make up'

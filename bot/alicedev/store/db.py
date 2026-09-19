@@ -48,6 +48,10 @@ class Store:
         await self._run(lambda c: c.execute(schema_sql))
         await self._migrate_to_v2()
         await self._reconcile_sequences()
+        # DuckDB 1.5.5 cannot replay some ALTER records before the default
+        # database is initialized.  Flush startup DDL/DML before serving so a
+        # normal container stop never leaves those records in the WAL.
+        await self.execute("CHECKPOINT")
 
     async def _migrate_to_v2(self) -> None:
         """Converge fresh and v1 databases to the v2 shape and UTC time base."""
@@ -91,25 +95,26 @@ class Store:
                     (_LEGACY_TIMESTAMP_MIGRATION,),
                 )
 
-        for table, column in (
-            ("schema_version", "applied_at"),
-            ("schema_migrations", "applied_at"),
-            ("sessions", "created_at"),
-            ("sessions", "last_activity_at"),
-            ("chat_current_sessions", "updated_at"),
-            ("messages", "created_at"),
-            ("reply_deliveries", "created_at"),
-            ("reply_deliveries", "updated_at"),
-            ("outbound", "created_at"),
-            ("requirements", "created_at"),
-            ("favorites", "created_at"),
-            ("reports", "created_at"),
-            ("tokens_issued", "issued_at"),
-        ):
-            await self.execute(
-                f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT "
-                "(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')"
-            )
+        if marker is None:
+            for table, column in (
+                ("schema_version", "applied_at"),
+                ("schema_migrations", "applied_at"),
+                ("sessions", "created_at"),
+                ("sessions", "last_activity_at"),
+                ("chat_current_sessions", "updated_at"),
+                ("messages", "created_at"),
+                ("reply_deliveries", "created_at"),
+                ("reply_deliveries", "updated_at"),
+                ("outbound", "created_at"),
+                ("requirements", "created_at"),
+                ("favorites", "created_at"),
+                ("reports", "created_at"),
+                ("tokens_issued", "issued_at"),
+            ):
+                await self.execute(
+                    f"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT "
+                    "(CURRENT_TIMESTAMP AT TIME ZONE 'UTC')"
+                )
 
         columns = await self.fetch_all("PRAGMA table_info('sessions')")
         name_column = next((row for row in columns if str(row[1]) == "name"), None)
