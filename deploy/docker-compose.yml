@@ -150,6 +150,8 @@ services:
       PASEO_HOSTNAMES: paseo,${ALICEDEV_HOST:?set ALICEDEV_HOST},localhost
       PASEO_LISTEN: 0.0.0.0:6767
       PASEO_WEB_UI_ENABLED: "true"
+      # omp inside paseo reads this key for the opencode-go provider.
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:?}
     expose: ["6767"]
     volumes:
       - paseo_home:/home/paseo

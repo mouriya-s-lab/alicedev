@@ -94,6 +94,13 @@ ssh nekoringo2 'cd /srv/alicedev && make up'
 ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps'
 ```
 
+首次启动后再初始化 workspace 卷：克隆 OpenAlice 并创建 alicedev 目录（可重复执行，
+已存在时跳过克隆）：
+
+```bash
+ssh nekoringo2 'cd /srv/alicedev && make workspace-init'
+```
+
 `make up` 不会重新 build；源码或 harness 变化后先跑 `make build`。`make down` 不
 删除卷，避免误删会话、omp 凭据、workspace 和报告。
 
@@ -224,19 +231,17 @@ ssh nekoringo2 'cd /srv/alicedev && docker compose --env-file deploy/.env -f dep
 4. 在 AstrBot 平台配置中选择 `qq_official`；官方 API 不需要 NapCat、OneBot、
    qsign 或额外 QQ 容器（[`docs/research/qq-protocol.md:135-152`](research/qq-protocol.md)）。
 
-这些是平台准入条件，不是 Compose 可以自动绕过的配置。
-
 ### 7.2 NapCat fallback（仅在必须使用个人 QQ 时）
 
 若目标群不能添加官方 Bot，研究给出的 fallback 是 NapCat + AstrBot reverse
 WebSocket；它需要持久化 QQ 数据，且不能保证不掉线/不封号
 ([`docs/research/qq-protocol.md:154-195`](research/qq-protocol.md))。仅在隔离账号上
-评估，生产主 Compose 不包含它。示例片段（先固定 digest，不要直接信任 `latest`）：
+评估，生产主 Compose 不包含它。示例片段（先固定 tag，不要直接信任 `latest`）：
 
 ```yaml
 services:
   napcat:
-    image: mlikiowa/napcat-docker:latest
+    image: mlikiowa/napcat-docker:v4.18.28
     restart: always
     environment:
       NAPCAT_UID: "1000"

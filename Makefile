@@ -4,7 +4,7 @@ COMPOSE_FILE := deploy/docker-compose.yml
 ENV_FILE := deploy/.env
 COMPOSE := docker compose -f $(COMPOSE_FILE) --env-file $(ENV_FILE)
 
-.PHONY: harness harness-clean render-config build up down logs deploy test-env test-rendered
+.PHONY: harness harness-clean render-config build up down logs workspace-init deploy test-env test-rendered
 
 # Build the omp extension + reply-cli into harness/dist/. Needs npm registry access.
 harness:
@@ -30,6 +30,11 @@ build: harness render-config
 
 up: test-env test-rendered
 	$(COMPOSE) up -d
+
+# Seed the workspace volume: clone OpenAlice once and ensure the alicedev dir exists.
+# Runs on the server tree; safe to re-run (clone is skipped when present).
+workspace-init: test-env
+	$(COMPOSE) run --rm --user paseo paseo sh -c 'test -d /workspace/openalice/.git || git clone https://github.com/TraderAlice/OpenAlice /workspace/openalice; mkdir -p /workspace/alicedev'
 
 down: test-env
 	$(COMPOSE) down

@@ -4,8 +4,8 @@ trigger:
   link: github_pr
 description: 读取 GitHub Pull Request，评估改动、风险与验证缺口
 harness: omp
-model: anthropic/claude-sonnet-4-5
-effort: high
+model: opencode-go/muse-spark-1.3-contributor
+effort: medium
 cwd: /workspace/openalice
 reply:
   kinds: [text, image_template]

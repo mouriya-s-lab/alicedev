@@ -1,4 +1,5 @@
 {
+  "admin_users": "${ALICEDEV_ADMIN_USERS}",
   "paseo_url": "http://paseo:6767",
   "paseo_password": "${PASEO_PASSWORD}",
   "paseo_provider": "omp-alicedev",

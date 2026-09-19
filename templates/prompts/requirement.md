@@ -5,8 +5,8 @@ trigger:
 aliases: [req]
 description: 记录群友需求并交给 AI 分析
 harness: omp
-model: anthropic/claude-fable-5-1
-effort: high
+model: opencode-go/muse-spark-1.3-contributor
+effort: medium
 record: requirement
 reply:
   kinds: [text, image_template]

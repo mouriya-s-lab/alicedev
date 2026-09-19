@@ -5,8 +5,8 @@ trigger:
 aliases: []
 description: 调查一个问题并直接回复，或生成 Markdown 调查报告
 harness: omp
-model: anthropic/claude-sonnet-4-5
-effort: high
+model: opencode-go/muse-spark-1.3-contributor
+effort: medium
 cwd: /workspace/openalice
 reply:
   kinds: [text, image_template, file]

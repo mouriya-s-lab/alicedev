@@ -4,8 +4,8 @@ trigger:
   link: github_issue
 description: 读取 GitHub Issue，提炼背景、现状、风险与可执行建议
 harness: omp
-model: anthropic/claude-sonnet-4-5
-effort: high
+model: opencode-go/muse-spark-1.3-contributor
+effort: medium
 cwd: /workspace/openalice
 reply:
   kinds: [text, image_template]
