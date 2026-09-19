@@ -1,0 +1,8 @@
+Command (run from /Users/mouriya/Ext/code/alicedev-wt/links-github):
+PYTHONPATH=bot uv run --with python-frontmatter --with jinja2 --python 3.11 python /tmp/alicedev-template-smoke.py
+
+Observed output:
+templates ['github-issue', 'github-pr', 'investigate', 'requirement']
+investigate-reply-kinds ('text', 'image_template', 'file')
+
+The throwaway script loaded the repo-level templates/prompts directory through TemplateRegistry, asserted github_issue/github_pr link triggers, asserted /帮我调查 and file reply metadata, rendered the report path instruction with a session_ref, and rendered GitHub fields. The script was removed after the run.
