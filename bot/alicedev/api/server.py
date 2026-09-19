@@ -116,9 +116,10 @@ class InternalApi:
     async def _auth_and_drain(self, request: web.Request, handler) -> web.StreamResponse:
         if self._draining:
             return web.json_response({"error": "draining"}, status=503)
-        token = request.headers.get("X-Alicedev-Token", "")
-        if not self._config.internal_token or token != self._config.internal_token:
-            return web.json_response({"error": "unauthorized"}, status=401)
+        if request.path != "/v1/health":  # liveness probe (compose healthcheck, reply-cli) carries no token
+            token = request.headers.get("X-Alicedev-Token", "")
+            if not self._config.internal_token or token != self._config.internal_token:
+                return web.json_response({"error": "unauthorized"}, status=401)
         self._inflight += 1
         try:
             return await handler(request)
