@@ -18,6 +18,7 @@ from alicedev.api.payloads import InvalidPayload, parse_reply_payload, payload_d
 from alicedev.api.reply import ReplyRenderer, ReplyValidationError
 from alicedev.reports import ReportError
 from alicedev.store.replies_repo import ClaimOutcome, RepliesRepo
+from alicedev.store.upgrade_runs_repo import UpgradeRunsRepo, record_dict
 
 if TYPE_CHECKING:
     from alicedev.commands.registry import CommandRegistry
@@ -54,8 +55,8 @@ class InternalApi:
         self._store = store
         self._sessions = sessions
         self._templates = templates
-        self._commands = commands
         self._replies = RepliesRepo(store)
+        self._upgrades = UpgradeRunsRepo(store)
         self._renderer = renderer
         self._sender = sender
         self._platforms_fn = platforms_fn
@@ -64,6 +65,8 @@ class InternalApi:
         self._app.add_routes(
             [
                 web.post("/v1/reply", self._handle_reply),
+                web.post("/v1/upgrade/callback", self._handle_upgrade_callback),
+                web.get("/v1/upgrade/state", self._handle_upgrade_state),
                 web.get("/v1/sessions/{session}", self._handle_session),
                 web.get("/v1/status", self._handle_status),
                 web.get("/v1/health", self._handle_health),
@@ -246,6 +249,150 @@ class InternalApi:
             out["report_url"] = rendered.report_url
         return web.json_response(out)
 
+
+    async def _handle_upgrade_state(self, request: web.Request) -> web.StreamResponse:
+        chat_key = request.query.get("chat", "").strip()
+        if not chat_key:
+            return web.json_response({"error": "chat_required"}, status=400)
+        record = await self._upgrades.latest_for_chat(chat_key)
+        return web.json_response({"run": record_dict(record) if record else None})
+
+    async def _handle_upgrade_callback(self, request: web.Request) -> web.StreamResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        event = body.get("event")
+        run_id = body.get("run_id")
+        if not isinstance(event, str) or not isinstance(run_id, str) or not run_id.strip():
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        record = await self._upgrades.get(run_id)
+        if record is None:
+            return web.json_response({"error": "upgrade_run_unknown"}, status=404)
+
+        if event == "candidate_ready":
+            commit = body.get("commit")
+            explain_img = body.get("explain_img")
+            evidence_img = body.get("evidence_img")
+            if not all(
+                isinstance(value, str) and value.strip()
+                for value in (commit, explain_img, evidence_img)
+            ):
+                return web.json_response({"error": "invalid_payload"}, status=400)
+            assert isinstance(commit, str)
+            assert isinstance(explain_img, str)
+            assert isinstance(evidence_img, str)
+            if not await self._upgrades.mark_candidate_ready(
+                run_id,
+                commit=commit,
+                evidence_refs={
+                    "explain_img": explain_img,
+                    "evidence_img": evidence_img,
+                },
+            ):
+                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
+            try:
+                from astrbot.api.message_components import Plain  # local: astrbot-only
+
+                components = [
+                    Plain(
+                        f"候选已就绪：{run_id}\n"
+                        f"candidate commit：{commit}\n"
+                        f"批准：/升级bot approve {run_id} {commit}\n"
+                        f"拒绝：/升级bot reject {run_id}"
+                    ),
+                    self._renderer.render_inline_image(explain_img),
+                    self._renderer.render_inline_image(evidence_img),
+                ]
+            except (ReportError, ReplyValidationError, ValueError) as exc:
+                _LOG.exception("upgrade candidate image render failed: run=%s", run_id)
+                return web.json_response({"error": str(exc) or "image_invalid"}, status=400)
+            try:
+                await self._sender.send(record.chat_key, components)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("upgrade candidate callback send failed: run=%s", run_id)
+                return web.json_response(
+                    {"error": "platform_send_failed", "detail": str(exc)}, status=502
+                )
+            # The transient candidate_ready state records successful artifact
+            # production; once both images are delivered, wait for the human.
+            await self._upgrades.mark_awaiting_approval(run_id)
+            return web.json_response(
+                {
+                    "status": "sent",
+                    "run": record_dict(await self._upgrades.get(run_id)),
+                }
+            )
+
+        if event == "main_sync_failed":
+            reason = body.get("reason")
+            paseo_link = body.get("paseo_link")
+            if not isinstance(reason, str) or not isinstance(paseo_link, str):
+                return web.json_response({"error": "invalid_payload"}, status=400)
+            if not await self._upgrades.mark_main_sync_failed(run_id):
+                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
+            from astrbot.api.message_components import Plain  # local: astrbot-only
+
+            text = f"升级运行 {run_id}：fixed-main 对齐失败。\n{reason}"
+            if paseo_link.strip():
+                text += f"\nPaseo：{paseo_link.strip()}"
+            await self._sender.send(record.chat_key, [Plain(text)])
+            return web.json_response(
+                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
+            )
+
+        if event == "e2e_not_converging":
+            round_summaries = body.get("round_summaries")
+            paseo_link = body.get("paseo_link")
+            if not isinstance(round_summaries, (str, list, tuple)) or not isinstance(
+                paseo_link, str
+            ):
+                return web.json_response({"error": "invalid_payload"}, status=400)
+            if not await self._upgrades.mark_failed(run_id):
+                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
+            from astrbot.api.message_components import Plain  # local: astrbot-only
+            import json
+
+            if isinstance(round_summaries, str):
+                summary = round_summaries
+            else:
+                summary = json.dumps(round_summaries, ensure_ascii=False)
+            text = f"升级运行 {run_id}：E2E 连续 5 轮未收敛。\n{summary}"
+            if paseo_link.strip():
+                text += f"\nPaseo：{paseo_link.strip()}"
+            await self._sender.send(record.chat_key, [Plain(text)])
+            return web.json_response(
+                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
+            )
+
+        if event == "deploy_result":
+            outcome = body.get("outcome")
+            paseo_link = body.get("paseo_link")
+            if outcome not in {"active", "rolled_back", "rollback_failed"}:
+                return web.json_response({"error": "invalid_payload"}, status=400)
+            if paseo_link is not None and not isinstance(paseo_link, str):
+                return web.json_response({"error": "invalid_payload"}, status=400)
+            if not await self._upgrades.mark_deploy_result(run_id, str(outcome)):
+                return web.json_response({"error": "invalid_transition"}, status=409)
+            from astrbot.api.message_components import Plain  # local: astrbot-only
+
+            labels = {
+                "active": "已上线并核实运行",
+                "rolled_back": "核实失败，已自动回滚",
+                "rollback_failed": "核实失败且自动回滚失败，需要人工介入",
+            }
+            text = f"升级运行 {run_id}：{labels[str(outcome)]}。"
+            if isinstance(paseo_link, str) and paseo_link.strip():
+                text += f"\nPaseo：{paseo_link.strip()}"
+            await self._sender.send(record.chat_key, [Plain(text)])
+            return web.json_response(
+                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
+            )
+
+        return web.json_response({"error": "event_unknown"}, status=400)
 
 def _reply_spec_dict(reply) -> dict[str, Any]:
     return {

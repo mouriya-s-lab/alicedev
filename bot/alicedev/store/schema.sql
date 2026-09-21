@@ -106,6 +106,29 @@ CREATE TABLE IF NOT EXISTS tokens_issued (
     expires_at   TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS upgrade_runs (
+    run_id          TEXT PRIMARY KEY,
+    chat_key        TEXT NOT NULL,
+    user_key        TEXT NOT NULL,
+    workspace_ref   TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (
+        status IN (
+            'accepted',
+            'candidate_ready',
+            'awaiting_approval',
+            'deploying',
+            'active',
+            'rolled_back',
+            'failed',
+            'main_sync_failed'
+        )
+    ),
+    candidate_commit TEXT,
+    evidence_refs   JSON,
+    created_at      TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    updated_at      TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+);
+
 -- Monotonic id allocator for tables with BIGINT surrogate keys (requirements,
 -- favorites). DuckDB sequences are used through nextval() in the repositories.
 CREATE SEQUENCE IF NOT EXISTS seq_requirements START 1;

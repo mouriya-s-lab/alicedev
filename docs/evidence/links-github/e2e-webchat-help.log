@@ -1,0 +1,17 @@
+Runtime:
+- Compose project: alicedev-e2e.
+- Containers: alicedev-e2e-astrbot (alicedev/e2e:local) and alicedev-e2e-t2i (pinned t2i digest).
+- Network: alicedev-e2e-network; WebChat published only on loopback random port 127.0.0.1:32774; internal API on 127.0.0.1:32775.
+- Final stack was rebuilt from the current checkout, with bot and templates mounted fresh at run time (no baked candidate tree), then recreated.
+- Browser: agent-browser session alicedev-e2e-8422c959524f, authenticated with the isolated dashboard placeholder password, then opened Chat.
+
+User path:
+1. Opened http://127.0.0.1:32774/#/chat and completed isolated AstrBot first-login setup.
+2. Filled the WebChat input with /alicedev and clicked 发送.
+3. Accessibility snapshot returned a rendered response attachment button: 20260922021948101_b886.png.
+4. Captured the rendered WebChat viewport with agent-browser screenshot; artifact: e2e-webchat-help.png (PNG, 1280x577, 54800 bytes).
+
+Observed startup evidence:
+- Plugin alicedev loaded.
+- Internal API listening on 0.0.0.0:6200 (generation=1).
+- AstrBot v4.28.1 WebUI ready; AstrBot started.

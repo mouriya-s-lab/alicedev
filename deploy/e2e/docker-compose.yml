@@ -1,0 +1,69 @@
+name: alicedev-e2e
+
+services:
+  astrbot:
+    build:
+      context: ../..
+      dockerfile: deploy/e2e/Dockerfile
+    image: alicedev/e2e:local
+    container_name: alicedev-e2e-astrbot
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: Asia/Shanghai
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${E2E_DASHBOARD_PASSWORD:-E2e-Local-Password9}
+    ports:
+      - "127.0.0.1:0:6185"
+      - "127.0.0.1:0:6200"
+    volumes:
+      - e2e_astrbot_data:/AstrBot/data
+      - ../../bot:/AstrBot/data/plugins/alicedev:ro
+      - ../../templates:/AstrBot/alicedev-templates:ro
+    networks:
+      - e2e
+    depends_on:
+      t2i:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request;
+          r = urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3);
+          raise SystemExit(0 if r.status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  t2i:
+    image: soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e
+    platform: linux/amd64
+    container_name: alicedev-e2e-t2i
+    restart: unless-stopped
+    expose:
+      - "8999"
+    networks:
+      - e2e
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import socket;
+          s = socket.create_connection(('127.0.0.1', 8999), 3);
+          s.close()
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  e2e:
+    name: alicedev-e2e-network
+
+volumes:
+  e2e_astrbot_data:

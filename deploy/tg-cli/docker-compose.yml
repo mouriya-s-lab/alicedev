@@ -1,0 +1,27 @@
+name: alicedev-tg-cli
+
+services:
+  tg-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        KABI_TG_CLI_VERSION: "0.6.0"
+    image: alicedev/tg-cli:local
+    container_name: alicedev-tg-cli
+    restart: always
+    environment:
+      DATA_DIR: /data
+      TG_SESSION_NAME: tg_cli
+    volumes:
+      - tg_cli_data:/data
+    command: ["sleep", "infinity"]
+    healthcheck:
+      test: ["CMD", "tg", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  tg_cli_data:
+    name: alicedev_tg_cli_data

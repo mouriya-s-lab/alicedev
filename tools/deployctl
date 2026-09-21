@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Deploy or roll back one bot checkout and verify the running AstrBot.
+
+The target is deliberately mandatory.  A target is an existing git checkout
+whose parent contains ``deploy/docker-compose.yml`` and ``deploy/.env``.  The
+compose project is addressed from that parent, so this shim never discovers or
+implicitly selects another checkout.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+_RUNNING_PLUGIN_DIR = "/AstrBot/data/plugins/alicedev"
+_HEALTH_COMMAND = (
+    "import urllib.request; "
+    "print(urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3).status)"
+)
+
+
+class DeployError(RuntimeError):
+    pass
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="deployctl")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    apply = commands.add_parser("apply", help="checkout and activate one candidate commit")
+    apply.add_argument("--commit", required=True, metavar="<sha>")
+    apply.add_argument("--target", required=True, type=Path, metavar="<botdir>")
+
+    rollback = commands.add_parser("rollback", help="checkout and activate a previous commit")
+    rollback.add_argument("--to", required=True, metavar="<sha>")
+    rollback.add_argument("--target", required=True, type=Path, metavar="<botdir>")
+    return parser
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    capture: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd) if cwd is not None else None,
+            text=True,
+            check=False,
+            capture_output=capture,
+        )
+    except OSError as exc:
+        raise DeployError(f"cannot execute {command[0]}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        suffix = f": {detail}" if detail else ""
+        raise DeployError(f"command failed ({result.returncode}): {' '.join(command)}{suffix}")
+    return result
+
+
+def _resolve_target(raw: Path) -> Path:
+    try:
+        target = raw.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise DeployError(f"target is not accessible: {raw}: {exc}") from exc
+    if not target.is_dir():
+        raise DeployError(f"target is not a directory: {target}")
+    return target
+
+
+def _resolve_commit(target: Path, requested: str) -> str:
+    if not requested.strip():
+        raise DeployError("commit must not be empty")
+    result = _run(
+        ["git", "-C", str(target), "rev-parse", "--verify", f"{requested}^{{commit}}"],
+        capture=True,
+    )
+    resolved = (result.stdout or "").strip()
+    if not resolved:
+        raise DeployError(f"commit does not resolve in target: {requested}")
+    return resolved.splitlines()[-1].strip()
+
+
+def _verify_git_checkout(target: Path) -> None:
+    result = _run(["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"], capture=True)
+    if (result.stdout or "").strip() != "true":
+        raise DeployError(f"target is not a git worktree: {target}")
+
+
+def _compose_args(project_root: Path, *tail: str) -> tuple[list[str], Path]:
+    compose_file = project_root / "deploy" / "docker-compose.yml"
+    env_file = project_root / "deploy" / ".env"
+    if not compose_file.is_file():
+        raise DeployError(f"compose file missing: {compose_file}")
+    if not env_file.is_file():
+        raise DeployError(f"compose env file missing: {env_file}")
+    return (
+        [
+            "docker",
+            "compose",
+            "-f",
+            "deploy/docker-compose.yml",
+            "--env-file",
+            "deploy/.env",
+            *tail,
+        ],
+        project_root,
+    )
+
+
+def _checkout_and_restart(requested: str, raw_target: Path, operation: str) -> dict[str, str]:
+    target = _resolve_target(raw_target)
+    project_root = target.parent
+    _verify_git_checkout(target)
+    resolved = _resolve_commit(target, requested)
+
+    # A normal checkout is intentional: a dirty target fails closed instead of
+    # silently destroying operator changes.  The target is detached so the
+    # running source is exactly the requested commit, not a moving branch.
+    _run(["git", "-C", str(target), "checkout", "--detach", resolved])
+    checked_out = (
+        _run(["git", "-C", str(target), "rev-parse", "HEAD"], capture=True).stdout or ""
+    ).strip()
+    if checked_out != resolved:
+        raise DeployError(f"checkout verification failed: expected {resolved}, got {checked_out}")
+
+    restart, cwd = _compose_args(project_root, "restart", "astrbot")
+    _run(restart, cwd=cwd)
+
+    running_cmd, cwd = _compose_args(
+        project_root,
+        "exec",
+        "-T",
+        "astrbot",
+        "git",
+        "-C",
+        _RUNNING_PLUGIN_DIR,
+        "rev-parse",
+        "HEAD",
+    )
+    running_result = _run(running_cmd, cwd=cwd, capture=True)
+    lines = [line.strip() for line in (running_result.stdout or "").splitlines() if line.strip()]
+    running = next((line for line in reversed(lines) if line == resolved), lines[-1] if lines else "")
+    if running != resolved:
+        raise DeployError(f"running SHA verification failed: expected {resolved}, got {running or '<empty>'}")
+
+    harmless, cwd = _compose_args(project_root, "exec", "-T", "astrbot", "python3", "-c", _HEALTH_COMMAND)
+    _run(harmless, cwd=cwd)
+
+    return {
+        "operation": operation,
+        "target": str(target),
+        "commit": resolved,
+        "running_sha": running,
+        "status": "active",
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        if args.command == "apply":
+            result = _checkout_and_restart(args.commit, args.target, "apply")
+        elif args.command == "rollback":
+            result = _checkout_and_restart(args.to, args.target, "rollback")
+        else:
+            raise DeployError(f"unsupported command: {args.command}")
+    except (DeployError, OSError) as exc:
+        print(f"deployctl: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

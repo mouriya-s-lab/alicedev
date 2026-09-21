@@ -1,0 +1,23 @@
+{
+  "allowed_chats": [],
+  "admin_users": [],
+  "paseo_url": "http://127.0.0.1:9",
+  "paseo_password": "e2e-placeholder",
+  "paseo_provider": "omp-alicedev",
+  "paseo_model": "",
+  "paseo_thinking": "high",
+  "paseo_cwd": "/workspace/alicedev",
+  "internal_token": "e2e-placeholder",
+  "internal_api_host": "0.0.0.0",
+  "internal_api_port": 6200,
+  "gateway_url": "http://127.0.0.1:9",
+  "public_base_url": "http://127.0.0.1",
+  "reports_root": "/AstrBot/data/plugin_data/alicedev/reports",
+  "templates_root": "/AstrBot/alicedev-templates",
+  "stickers_root": "/AstrBot/alicedev-templates/stickers",
+  "images_root": "/AstrBot/data/plugin_data/alicedev/images",
+  "github_token": "",
+  "default_repo": "TraderAlice/OpenAlice",
+  "idle_close_seconds": 43200,
+  "sweeper_interval_seconds": 600
+}

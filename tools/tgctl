@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""CLI shim for the persistent alicedev-tg-cli container.
+
+Only the small, contract-defined Telegram surface is exposed.  Values are
+passed as individual argv elements to ``docker``; no shell is involved.
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+_CONTAINER = "alicedev-tg-cli"
+_TG_BINARY = "tg"
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tgctl")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    send = commands.add_parser("send", help="send one Telegram text message")
+    send.add_argument("--chat", required=True, metavar="<chat>")
+    source = send.add_mutually_exclusive_group(required=True)
+    source.add_argument("--text", metavar="<text>")
+    source.add_argument("--file", type=Path, metavar="<file>")
+
+    recent = commands.add_parser("recent", help="read recent cached messages")
+    recent.add_argument("--chat", required=True, metavar="<chat>")
+    recent.add_argument("--limit", required=True, type=_positive_int, metavar="N")
+    recent.add_argument("--yaml", action="store_true", help="request YAML output")
+
+    photo = commands.add_parser("photo", help="download a message photo")
+    photo.add_argument("--msg", required=True, metavar="<message-id>")
+    photo.add_argument("--out", required=True, type=Path, metavar="<path>")
+    return parser
+
+
+def _run_child(arguments: list[str]) -> int:
+    command = ["docker", "exec", _CONTAINER, _TG_BINARY, *arguments]
+    try:
+        completed = subprocess.run(command, check=False)
+    except OSError as exc:
+        print(f"tgctl: unable to execute docker: {exc}", file=sys.stderr)
+        return 1
+    return completed.returncode
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.command == "send":
+        if args.text is not None:
+            text = args.text
+        else:
+            try:
+                text = args.file.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"tgctl: cannot read {args.file}: {exc}", file=sys.stderr)
+                return 1
+        return _run_child(["send", args.chat, text])
+
+    if args.command == "recent":
+        child = ["recent", "--chat", args.chat, "--limit", str(args.limit)]
+        if args.yaml:
+            child.append("--yaml")
+        return _run_child(child)
+
+    if args.command == "photo":
+        # The persistent container owns the Telegram session and the `tg`
+        # executable owns media download semantics.  Keep this forwarding
+        # surface stable even while older tg-cli images lack `photo`.
+        return _run_child(["photo", "--msg", args.msg, "--out", str(args.out)])
+
+    print(f"tgctl: unsupported command {args.command}", file=sys.stderr)
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    return _run(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

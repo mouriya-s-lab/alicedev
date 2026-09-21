@@ -1,0 +1,9 @@
+{
+  "failing_checks": [],
+  "error_signatures": [],
+  "distance": 0,
+  "distance_definition": "cardinality(failing_checks) + cardinality(error_signatures); candidate side",
+  "baseline_failing_checks": [],
+  "baseline_error_signatures": [],
+  "baseline_distance": 0
+}

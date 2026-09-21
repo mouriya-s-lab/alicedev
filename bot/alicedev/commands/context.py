@@ -18,8 +18,8 @@ if TYPE_CHECKING:
     from alicedev.config import PluginConfig
     from alicedev.gateway_client import GatewayClient
     from alicedev.github.client import GithubClient
+    from alicedev.commands.upgrade import UpgradeConductor
     from alicedev.paseo.control import PaseoControl
-    from alicedev.paseo.session_actor import SessionActor
     from alicedev.render.cards import CardRenderer
     from alicedev.store.db import Store
     from alicedev.templates.registry import TemplateRegistry
@@ -57,7 +57,7 @@ class Services:
     github: "GithubClient"
     config: "PluginConfig"
     internal_api: "InternalApi"
-
+    conductor: "UpgradeConductor | None" = None
 
 @dataclass
 class CommandContext:

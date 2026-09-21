@@ -1,0 +1,16 @@
+{
+  "phase": "e2e",
+  "status": "success",
+  "commit": "82bd0684975e5158f990587007c04e849e08cc98",
+  "evidence_paths": [
+    "baseline/capture.png",
+    "baseline/run.json",
+    "candidate/capture.png",
+    "candidate/run.json",
+    "metric.json",
+    "evidence.json",
+    "e2e-yield.json"
+  ],
+  "run_id": "e2e-20260921T192625Z-28854e35",
+  "backend": "agent-browser"
+}

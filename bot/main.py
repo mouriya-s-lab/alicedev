@@ -34,6 +34,7 @@ from alicedev.commands import (  # noqa: E402
     links,
     lists,
     requirement,
+    upgrade,
 )
 from alicedev.commands.context import Services  # noqa: E402
 from alicedev.commands.dispatch import CommandDispatcher  # noqa: E402
@@ -144,6 +145,7 @@ class AliceDevPlugin(Star):
         render = _optional_card_renderer(self, config.templates_root)
         gateway = _optional_gateway_client(config)
         github = _optional_github_client(config)
+        conductor = upgrade.StubUpgradeConductor()
         reports = ReportPublisher(store=store, config=config)
         renderer = ReplyRenderer(
             config=config, templates=templates, render=render, reports=reports
@@ -157,11 +159,10 @@ class AliceDevPlugin(Star):
             platforms_fn=self._platform_names,
         )
         self._api = api
-
         services = Services(
             store=store, templates=templates, paseo=paseo, sessions=actor,
             render=render, gateway=gateway, github=github, config=config,
-            internal_api=api,
+            internal_api=api, conductor=conductor,
         )
         self._services = services
 
@@ -174,6 +175,7 @@ class AliceDevPlugin(Star):
         interpret.register(registry, services)
         archive.register(registry, services)
         help.register(registry, services)
+        upgrade.register(registry, services)
 
         self._dispatcher = CommandDispatcher(registry, services)
 

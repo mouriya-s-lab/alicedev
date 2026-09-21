@@ -20,6 +20,8 @@ from alicedev.api.payloads import (
     TextReply,
     TextTemplateReply,
 )
+from alicedev.images import ImageDownloadError, image_data_uri
+from alicedev.reports import ReportError
 
 if TYPE_CHECKING:
     from alicedev.config import PluginConfig
@@ -101,6 +103,36 @@ class ReplyRenderer:
             case FileReply(path=path, caption=caption):
                 await self._render_file(result, path, caption, Image, Plain)
         return result
+
+    def render_inline_image(self, path: str | Path) -> Any:
+        """Build an AstrBot ``Image`` backed by inline base64 data.
+
+        Callback screenshots live on the shared reports volume.  Sending their
+        filesystem path would make AstrBot classify them as a file attachment;
+        materializing the bytes as base64 keeps the outbound component an
+        ``Image`` even when the callback originated in another container.
+        """
+
+        from astrbot.api.message_components import Image  # local: astrbot-only
+
+        reference = str(path).strip()
+        if reference.startswith("data:image/"):
+            data_uri = reference
+        else:
+            source = Path(reference).expanduser().resolve()
+            reports_root = self._config.reports_root.expanduser().resolve()
+            try:
+                source.relative_to(reports_root)
+            except ValueError as exc:
+                raise ReportError("path_outside_root") from exc
+            try:
+                data_uri = image_data_uri(source)
+            except ImageDownloadError as exc:
+                raise ReportError("file_not_regular") from exc
+        _prefix, separator, encoded = data_uri.partition(",")
+        if not separator or not encoded:
+            raise ReportError("file_not_regular")
+        return Image.fromBase64(encoded)
 
     def _render_text_template(self, template: str, fields: Any) -> str:
         tpl = self._templates.by_name(template)

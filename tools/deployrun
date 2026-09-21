@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+"""Orchestrate one approved git deployment outside the bot process.
+
+``deployctl`` owns the checkout/restart/running-SHA/health mechanics.  This
+wrapper owns the lifecycle around that operation: it records the previous
+revision, invokes ``apply``, validates the machine-readable result, rolls back
+on any apply/verification failure, and emits one ``deploy_result`` boundary
+event through ``botctl callback``.
+
+A target is always explicit and production paths are rejected.  The default
+paths resolve beside this file, while ``--deployctl``/``--botctl`` are useful
+for isolated harnesses and throwaway environments.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+class DeployRunError(RuntimeError):
+    """A deployment or callback could not be completed."""
+
+
+_THIS_DIR = Path(__file__).resolve().parent
+_DEFAULT_DEPLOYCTL = _THIS_DIR / "deployctl"
+_DEFAULT_BOTCTL = _THIS_DIR / "botctl"
+_PRODUCTION_ROOT = Path("/srv/alicedev").resolve()
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="deployrun")
+    parser.add_argument("--run-id", required=True, metavar="<run-id>")
+    parser.add_argument("--commit", required=True, metavar="<sha>")
+    parser.add_argument("--target", required=True, type=Path, metavar="<botdir>")
+    parser.add_argument(
+        "--paseo-link",
+        default=os.environ.get("PASEO_LINK", ""),
+        help="optional Paseo session link included in the boundary event",
+    )
+    parser.add_argument(
+        "--deployctl",
+        type=Path,
+        default=Path(os.environ.get("DEPLOYCTL_BIN", str(_DEFAULT_DEPLOYCTL))),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--botctl",
+        type=Path,
+        default=Path(os.environ.get("BOTCTL_BIN", str(_DEFAULT_BOTCTL))),
+        help=argparse.SUPPRESS,
+    )
+    return parser
+
+
+def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(command, text=True, capture_output=True, check=False)
+    except OSError as exc:
+        raise DeployRunError(f"cannot execute {command[0]}: {exc}") from exc
+
+
+def _resolve_target(raw: Path) -> Path:
+    try:
+        target = raw.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise DeployRunError(f"target is not accessible: {raw}: {exc}") from exc
+    if not target.is_dir():
+        raise DeployRunError(f"target is not a directory: {target}")
+    try:
+        target.relative_to(_PRODUCTION_ROOT)
+    except ValueError:
+        return target
+    raise DeployRunError(f"production target is forbidden: {target}")
+
+
+def _git_head(target: Path) -> str:
+    result = _run(["git", "-C", str(target), "rev-parse", "--verify", "HEAD"])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise DeployRunError(f"cannot read target HEAD: {detail or target}")
+    head = (result.stdout or "").strip().splitlines()
+    if not head or not head[-1].strip():
+        raise DeployRunError(f"target HEAD is empty: {target}")
+    return head[-1].strip()
+
+
+def _failure_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip()
+    return detail or f"exit status {result.returncode}"
+
+
+def _json_result(result: subprocess.CompletedProcess[str], *, operation: str) -> dict[str, Any]:
+    if result.returncode != 0:
+        raise DeployRunError(f"deployctl {operation} failed: {_failure_detail(result)}")
+    raw = (result.stdout or "").strip()
+    if not raw:
+        raise DeployRunError(f"deployctl {operation} returned no result")
+    try:
+        value: Any = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise DeployRunError(f"deployctl {operation} returned invalid JSON: {raw!r}") from exc
+    if not isinstance(value, dict):
+        raise DeployRunError(f"deployctl {operation} result is not an object")
+    return value
+
+
+def _verify_result(
+    result: subprocess.CompletedProcess[str], *, operation: str, expected_sha: str
+) -> dict[str, Any]:
+    payload = _json_result(result, operation=operation)
+    if payload.get("status") != "active":
+        raise DeployRunError(
+            f"deployctl {operation} did not report active status: {payload.get('status')!r}"
+        )
+    running_sha = payload.get("running_sha")
+    if not isinstance(running_sha, str) or not (
+        running_sha == expected_sha or running_sha.startswith(expected_sha)
+    ):
+        raise DeployRunError(
+            f"deployctl {operation} running SHA mismatch: expected {expected_sha}, got {running_sha!r}"
+        )
+    return payload
+
+
+def _event(run_id: str, outcome: str, paseo_link: str) -> dict[str, str]:
+    payload = {"event": "deploy_result", "run_id": run_id, "outcome": outcome}
+    if paseo_link.strip():
+        payload["paseo_link"] = paseo_link.strip()
+    return payload
+
+
+def _callback(botctl: Path, payload: dict[str, str]) -> None:
+    # botctl accepts a file so no event JSON is ever passed through a shell or
+    # exposed as an argument in process listings.
+    with tempfile.TemporaryDirectory(prefix="alicedev-deployrun-") as directory:
+        event_path = Path(directory) / "deploy-result.json"
+        event_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        result = _run([str(botctl), "callback", str(event_path)])
+    if result.returncode != 0:
+        raise DeployRunError(f"deploy_result callback failed: {_failure_detail(result)}")
+    response = (result.stdout or "").strip()
+    if not response:
+        return
+    try:
+        parsed: Any = json.loads(response)
+    except json.JSONDecodeError:
+        # botctl's contract preserves the endpoint body, but a small isolated
+        # shim may intentionally return plain acknowledgement text.
+        return
+    if isinstance(parsed, dict) and parsed.get("status") not in (None, "sent"):
+        raise DeployRunError(f"deploy_result callback was not accepted: {response}")
+
+
+def _deploy(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    run_id = args.run_id.strip()
+    commit = args.commit.strip()
+    if not run_id:
+        raise DeployRunError("--run-id must not be empty")
+    if not commit:
+        raise DeployRunError("--commit must not be empty")
+
+    target = _resolve_target(args.target)
+    previous_sha = _git_head(target)
+
+    # Keep apply failures (including an unavailable deployctl executable) on
+    # the rollback path so every attempted deployment gets one terminal
+    # deploy_result callback.
+    apply_error: DeployRunError | None = None
+    applied: dict[str, Any] | None = None
+    try:
+        apply_result = _run(
+            [
+                str(args.deployctl),
+                "apply",
+                "--commit",
+                commit,
+                "--target",
+                str(target),
+            ]
+        )
+        applied = _verify_result(apply_result, operation="apply", expected_sha=commit)
+    except DeployRunError as exc:
+        apply_error = exc
+
+    if apply_error is not None:
+        rollback_error: DeployRunError | None = None
+        rolled_back: dict[str, Any] | None = None
+        try:
+            rollback_result = _run(
+                [
+                    str(args.deployctl),
+                    "rollback",
+                    "--to",
+                    previous_sha,
+                    "--target",
+                    str(target),
+                ]
+            )
+            rolled_back = _verify_result(
+                rollback_result, operation="rollback", expected_sha=previous_sha
+            )
+        except DeployRunError as exc:
+            rollback_error = exc
+
+        if rollback_error is not None:
+            payload = _event(run_id, "rollback_failed", args.paseo_link)
+            try:
+                _callback(args.botctl, payload)
+            except DeployRunError as callback_error:
+                raise DeployRunError(
+                    f"{apply_error}; {rollback_error}; {callback_error}"
+                ) from callback_error
+            return 1, {
+                "run_id": run_id,
+                "outcome": "rollback_failed",
+                "target": str(target),
+                "previous_sha": previous_sha,
+                "commit": commit,
+                "error": f"{apply_error}; {rollback_error}",
+            }
+
+        assert rolled_back is not None
+        payload = _event(run_id, "rolled_back", args.paseo_link)
+        _callback(args.botctl, payload)
+        return 1, {
+            "run_id": run_id,
+            "outcome": "rolled_back",
+            "target": str(target),
+            "previous_sha": previous_sha,
+            "commit": commit,
+            "rollback": rolled_back,
+        }
+
+    assert applied is not None
+    payload = _event(run_id, "active", args.paseo_link)
+    _callback(args.botctl, payload)
+    return 0, {
+        "run_id": run_id,
+        "outcome": "active",
+        "target": str(target),
+        "previous_sha": previous_sha,
+        "commit": commit,
+        "apply": applied,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    try:
+        status, result = _deploy(args)
+    except DeployRunError as exc:
+        print(f"deployrun: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
