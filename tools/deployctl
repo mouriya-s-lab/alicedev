@@ -150,7 +150,9 @@ def _checkout_and_restart(requested: str, raw_target: Path, operation: str) -> d
         raise DeployError(f"running SHA verification failed: expected {resolved}, got {running or '<empty>'}")
 
     harmless, cwd = _compose_args(project_root, "exec", "-T", "astrbot", "python3", "-c", _HEALTH_COMMAND)
-    _run(harmless, cwd=cwd)
+    # Capture the health probe's stdout so its "200" status line never leaks
+    # into deployctl's own machine-readable JSON stdout (deployrun parses it).
+    _run(harmless, cwd=cwd, capture=True)
 
     return {
         "operation": operation,
