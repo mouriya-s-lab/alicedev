@@ -116,7 +116,9 @@ services:
       TZ: Asia/Shanghai
       ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${ASTRBOT_DASHBOARD_INITIAL_PASSWORD:?set ASTRBOT_DASHBOARD_INITIAL_PASSWORD}
     ports:
-      - "127.0.0.1:6185:6185"
+      # Bind the dashboard to PANEL_BIND_IP (netbird wt0 on the host) so mesh
+      # peers reach it directly; falls back to loopback when unset.
+      - "${PANEL_BIND_IP:-127.0.0.1}:6185:6185"
     volumes:
       - astrbot_data:/AstrBot/data
       - ../bot:/AstrBot/data/plugins/alicedev
@@ -152,7 +154,9 @@ services:
       MODE: astrbot
       TZ: Asia/Shanghai
     ports:
-      - "127.0.0.1:6099:6099"
+      # Bind the WebUI to PANEL_BIND_IP (netbird wt0 on the host) so mesh peers
+      # reach it directly; falls back to loopback when unset.
+      - "${PANEL_BIND_IP:-127.0.0.1}:6099:6099"
     volumes:
       - napcat_qq:/app/.config/QQ
       - napcat_config:/app/napcat/config
