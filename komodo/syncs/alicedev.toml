@@ -1,0 +1,110 @@
+# Komodo ResourceSync declaration for the alicedev Compose workload.
+#
+# Authority: this file (mouriya-s-lab/alicedev :: komodo/syncs/alicedev.toml) is
+# the DURABLE, repo-backed declaration for the alicedev Stack on the `nekoringo`
+# Komodo Core / server `nekoringo2`. It is NOT a dashboard one-off. A ResourceSync
+# resource (declared below, self-managing) reconciles these blocks by diffing them
+# against live Komodo state and applying create/update. Apply path:
+#   km -p nekoringo ls syncs -f json                 # confirm the sync exists
+#   km -p nekoringo x run-sync alicedev              # inspect diff in UI first, then apply
+# run-sync only reconciles the Komodo *resource definitions*; it does NOT deploy.
+# Deploying the Stack (checkpoint 1) is a separate, operator-authorized execute.
+#
+# ADOPTION CONTRACT (Phase C, checkpoint 1 = "Komodo owns and redeploys WITHOUT
+# changing the data contract"): the running Compose project on nekoringo2 is named
+# `deploy` (derived from /srv/alicedev/deploy; the compose file has no top-level
+# name:). Docker recreates a container only when its `com.docker.compose.config-hash`
+# changes. Verified baseline (read-only): `docker compose config --hash '*'` from the
+# running file equals every running container's config-hash label exactly. Therefore
+# a Komodo deploy of byte-identical compose content, with project_name = "deploy" and
+# an environment that reproduces the server .env verbatim, computes the same hashes
+# and recreates NOTHING — it adopts the existing containers/volumes/networks in place.
+#
+# PREREQUISITES before the first `deploy-stack` (each would otherwise force a recreate
+# or a failed deploy — do NOT deploy until all are satisfied):
+#   1. BLOCKER (QQ identity): commit + push the working-tree compose to origin/main.
+#      HEAD is currently 3 lines behind and MISSING the napcat `hostname: DESKTOP-Q7M3K8P`
+#      pin. A HEAD-based deploy would drop that line, change napcat's config-hash, and
+#      recreate napcat with a container-id hostname -> QQ sees a new device and can go
+#      offline / require re-auth. repo HEAD compose MUST equal the running compose.
+#   2. Env parity: create the Komodo Variables/Secrets referenced below on the
+#      `nekoringo` Core, sourced from the existing server-only /srv/alicedev/deploy/.env
+#      (0600). Values must match verbatim; a single differing value shifts that service's
+#      config-hash and recreates it. Secret VALUES never live in this file.
+#   3. Local images: gateway/paseo use `image: alicedev/*:local` built on the host with a
+#      build context (`..` = repo root, plus the sibling paseo-alicedev checkout) that is
+#      ABSENT in Komodo's clone. Keep run_build = false and auto_pull = false; the first
+#      adopting deploy must reuse the images already present on nekoringo2. (paseo-base is
+#      profile=build and excluded from `up`.)
+#   4. Server-only rendered configs: deploy/astrbot/*.rendered.json and deploy/.env are
+#      gitignored (they carry NAPCAT_ONEBOT_TOKEN and other secrets) and are NOT in the
+#      clone. They only matter if the one-shot init services (reports-init, astrbot-init)
+#      are recreated; with identical content they stay exited(0) and are untouched. Do NOT
+#      commit them. For any future deploy that must re-run the inits, materialize them in
+#      the run_directory via the render step before deploying.
+
+[[resource_sync]]
+name = "alicedev"
+[resource_sync.config]
+git_provider = "github.com"
+git_account = "RiriAgent"                 # account with read on the private repo
+repo = "mouriya-s-lab/alicedev"
+branch = "main"
+resource_path = ["komodo/syncs"]
+# Manage only what is declared here; do not delete unmanaged Komodo resources.
+managed_users = false
+delete = false
+
+[[stack]]
+name = "alicedev"
+[stack.config]
+server = "nekoringo2"
+
+# ADOPTION KEY: match the already-running Compose project name (`deploy`), not the
+# Stack name. Without this, Komodo would run `docker compose -p alicedev up`, collide
+# on the pinned container_names, and recreate a foreign set.
+project_name = "deploy"
+
+# Repo-backed (git clone) mode: Komodo clones mouriya-s-lab/alicedev and runs compose
+# from the deploy/ subdirectory against docker-compose.yml.
+git_provider = "github.com"
+git_account = "RiriAgent"
+repo = "mouriya-s-lab/alicedev"
+branch = "main"
+run_directory = "deploy"
+file_paths = ["docker-compose.yml"]
+
+# Never rebuild or pull in the clone: images are host-built `:local` (no registry, build
+# context absent in clone) or already pinned by digest. The adopting deploy reuses the
+# images already present on nekoringo2.
+run_build = false
+auto_pull = false
+poll_for_updates = false
+auto_update = false
+
+# Never tear down before deploy — QQ (napcat) must not go offline.
+destroy_before_deploy = false
+
+# One-shot init containers exit 0 by design; exclude from health evaluation so an
+# adopting deploy is not reported unhealthy. (paseo-base is profile=build, not started.)
+ignore_services = ["reports-init", "astrbot-init"]
+
+# Interpolate Komodo Variables/Secrets into the .env Komodo writes for --env-file.
+# Values are referenced by NAME only ([[SECRET_NAME]]); no secret value is stored here.
+# These MUST reproduce /srv/alicedev/deploy/.env verbatim (prerequisite 2) so the
+# resolved compose config-hash matches the running containers and nothing is recreated.
+skip_secret_interp = false
+environment = """
+ALICEDEV_HOST=[[ALICEDEV_HOST]]
+GATEWAY_SECRET=[[GATEWAY_SECRET]]
+ALICEDEV_INTERNAL_TOKEN=[[ALICEDEV_INTERNAL_TOKEN]]
+PASEO_PASSWORD=[[PASEO_PASSWORD]]
+ASTRBOT_DASHBOARD_INITIAL_PASSWORD=[[ASTRBOT_DASHBOARD_INITIAL_PASSWORD]]
+NAPCAT_ONEBOT_TOKEN=[[NAPCAT_ONEBOT_TOKEN]]
+OPENCODE_API_KEY=[[OPENCODE_API_KEY]]
+TELEGRAM_BOT_TOKEN=[[TELEGRAM_BOT_TOKEN]]
+GITHUB_TOKEN=[[GITHUB_TOKEN]]
+ALICEDEV_ADMIN_USERS=[[ALICEDEV_ADMIN_USERS]]
+NAPCAT_UID=1000
+NAPCAT_GID=1000
+"""

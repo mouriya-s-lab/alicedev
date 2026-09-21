@@ -141,6 +141,9 @@ services:
     image: mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee
     platform: linux/amd64
     container_name: alicedev-napcat
+    # Pin a stable, ordinary-looking device name so QQ does not see a new
+    # device on every container recreate (default hostname = container id).
+    hostname: DESKTOP-Q7M3K8P
     restart: unless-stopped
     # CPU-only: the image uses its virtual display and has no GPU devices.
     environment:
