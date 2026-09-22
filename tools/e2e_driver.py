@@ -53,6 +53,7 @@ def _load_deployctl() -> Any:
     spec = importlib.util.spec_from_loader(loader.name, loader)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses resolve string annotations via sys.modules
     loader.exec_module(module)
     return module
 
