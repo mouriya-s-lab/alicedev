@@ -13,8 +13,10 @@
 
 /* Desktop left sidebar: the outermost container that holds the sidebar's
    buttons but not the workspace pane (verified on paseo 0.8.0 @7ab7c444d:
-   hiding it collapses the 320px column so the pane starts at x=0). */
-div:has([data-testid="sidebar-global-new-workspace"]):not(:has([data-testid="workspace-tabs-row"])),
+   hiding it collapses the 320px column so the pane starts at x=0). Only on a
+   workspace page: elsewhere (e.g. /open-project) no container lacks the tabs
+   row, so the rule would hide the whole app. */
+body:has([data-testid="workspace-tabs-row"]) div:has([data-testid="sidebar-global-new-workspace"]):not(:has([data-testid="workspace-tabs-row"])),
 div:has(> div > [data-testid="left-sidebar-resize-handle"]),
 div:has(> [data-testid="left-sidebar-resize-handle"]) {
   display: none !important;
