@@ -1,0 +1,43 @@
+/*
+ * alicedev share view (ARCHITECTURE §8).
+ *
+ * Injected by the gateway into every proxied Paseo HTML document.  It only
+ * hides navigation chrome so a shared link shows the agent workspace (session
+ * tabs, conversation, composer).  Paseo's source is never modified; this is a
+ * UI narrowing, not an authorization boundary.
+ *
+ * Selectors come from Paseo's React Native Web testIDs (rendered as
+ * data-testid).  They are bound to the deployed Paseo version: re-verify with
+ * agent-browser after every Paseo upgrade (see gateway/README.md).
+ */
+
+/* Desktop left sidebar: Animated.View > View > …, resize handle is a direct
+   child of the inner View.  Hide the outer container so its width collapses. */
+div:has(> div > [data-testid="left-sidebar-resize-handle"]),
+div:has(> [data-testid="left-sidebar-resize-handle"]) {
+  display: none !important;
+}
+
+/* Mobile/compact sidebar overlay (contains the sidebar close button). */
+div:has(> div > div > [data-testid="sidebar-close"]),
+div:has(> div > [data-testid="sidebar-close"]) {
+  display: none !important;
+}
+
+/* Controls that reopen the sidebar or navigate away from the workspace. */
+[data-testid="menu-button"],
+[data-testid="sidebar-add-project"],
+[data-testid="sidebar-hosts-trigger"],
+[data-testid="sidebar-import-session"],
+[data-testid="sidebar-settings"],
+[data-testid="workspace-new-tab-button"],
+[data-testid="workspace-split-pane-menu"],
+[data-testid="workspace-exit-focus-mode"],
+[data-testid="workspace-explorer-toggle"] {
+  display: none !important;
+}
+
+/* Explorer dock next to the workspace panes. */
+div:has(> [data-testid="workspace-explorer-sidebar-resize-handle"]) {
+  display: none !important;
+}

@@ -6,11 +6,34 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
+import logging
+import re
 from typing import Final
+import zlib
 
-from aiohttp import ClientError, ClientSession, WSMsgType, web
+from aiohttp import ClientError, ClientResponse, ClientSession, WSMsgType, web
 
 from .config import GatewayConfig
+
+
+_LOGGER = logging.getLogger("alicedev_gateway.proxy")
+
+# Share view (ARCHITECTURE §8): every proxied Paseo HTML document gets the
+# gateway-owned stylesheet that hides the navigation chrome.  Paseo's source is
+# never modified; the stylesheet only hides elements.
+SHARE_VIEW_STYLESHEET_HREF: Final[str] = "/_alicedev/static/paseo-view.css"
+_SHARE_VIEW_LINK: Final[bytes] = (
+    f'<link rel="stylesheet" href="{SHARE_VIEW_STYLESHEET_HREF}">'.encode("ascii")
+)
+# Largest HTML document the gateway buffers for injection.  Paseo's index.html
+# is a small SPA shell; anything larger streams through untouched.
+_MAX_INJECT_BYTES: Final[int] = 4 * 1024 * 1024
+_HEAD_CLOSE = re.compile(rb"</head\s*>", re.IGNORECASE)
+_HEAD_OPEN = re.compile(rb"<head(\s[^>]*)?>", re.IGNORECASE)
+# Headers that no longer describe the body after injection.
+_INJECTED_DROP_HEADERS: Final[frozenset[str]] = frozenset(
+    {"content-length", "content-encoding", "etag", "content-md5"}
+)
 
 
 _HOP_BY_HOP_HEADERS: Final[frozenset[str]] = frozenset(
@@ -68,6 +91,11 @@ class PaseoProxy:
 
     async def http(self, request: web.Request) -> web.StreamResponse:
         headers = self._http_request_headers(request)
+        html_navigation = _is_html_navigation(request)
+        if html_navigation:
+            # Ask upstream for an uncompressed document so the stylesheet can be
+            # injected without re-encoding; Caddy compresses toward the browser.
+            headers["Accept-Encoding"] = "identity"
         body: AsyncIterator[bytes] | None = None
         if request.can_read_body and request.method not in {"GET", "HEAD"}:
             body = request.content.iter_chunked(64 * 1024)
@@ -83,6 +111,58 @@ class PaseoProxy:
         except (ClientError, asyncio.TimeoutError) as exc:
             raise web.HTTPBadGateway(text="paseo 上游暂时不可用") from exc
 
+        if html_navigation and _is_injectable_html(upstream):
+            return await self._html_with_share_view(request, upstream)
+        return await self._stream(request, upstream)
+
+    async def _html_with_share_view(
+        self, request: web.Request, upstream: ClientResponse
+    ) -> web.StreamResponse:
+        """Buffer an HTML document, inject the share-view stylesheet, respond.
+
+        An oversized document streams through untouched (prefix already read is
+        replayed first); an encoding the gateway cannot decode (e.g. ``br``)
+        is returned byte-for-byte with its original headers.
+        """
+        try:
+            buffered = bytearray()
+            async for chunk in upstream.content.iter_chunked(64 * 1024):
+                buffered += chunk
+                if len(buffered) > _MAX_INJECT_BYTES:
+                    _LOGGER.warning("html document too large to inject share view; streaming as-is")
+                    return await self._stream(request, upstream, prefix=bytes(buffered))
+
+            headers = self._response_headers(upstream.headers)
+            encoding = upstream.headers.get("Content-Encoding", "identity")
+            decoded = decode_body(bytes(buffered), encoding)
+            if decoded is None:
+                _LOGGER.warning(
+                    "cannot decode upstream html encoding %r; share view not injected", encoding
+                )
+                return web.Response(
+                    status=upstream.status,
+                    reason=upstream.reason,
+                    body=bytes(buffered),
+                    headers={k: v for k, v in headers.items() if k.lower() != "content-length"},
+                )
+            return web.Response(
+                status=upstream.status,
+                reason=upstream.reason,
+                body=inject_stylesheet(decoded),
+                headers={
+                    k: v for k, v in headers.items() if k.lower() not in _INJECTED_DROP_HEADERS
+                },
+            )
+        finally:
+            upstream.close()
+
+    async def _stream(
+        self,
+        request: web.Request,
+        upstream: ClientResponse,
+        *,
+        prefix: bytes = b"",
+    ) -> web.StreamResponse:
         response = web.StreamResponse(
             status=upstream.status,
             reason=upstream.reason,
@@ -90,12 +170,12 @@ class PaseoProxy:
         )
         try:
             await response.prepare(request)
+            if prefix:
+                await response.write(prefix)
             async for chunk in upstream.content.iter_chunked(64 * 1024):
                 await response.write(chunk)
             await response.write_eof()
             return response
-        except (ConnectionError, asyncio.CancelledError):
-            raise
         finally:
             upstream.close()
 
@@ -191,3 +271,53 @@ class PaseoProxy:
             for key, value in source
             if key.lower() not in _RESPONSE_DROP_HEADERS
         }
+
+
+def _is_html_navigation(request: web.Request) -> bool:
+    """A browser document load: GET that accepts HTML and is not a WS upgrade."""
+    return request.method == "GET" and "text/html" in request.headers.get("Accept", "")
+
+
+def _is_injectable_html(upstream: ClientResponse) -> bool:
+    content_type = upstream.headers.get("Content-Type", "")
+    return upstream.status == 200 and content_type.split(";", 1)[0].strip().lower() == "text/html"
+
+
+def decode_body(body: bytes, content_encoding: str) -> bytes | None:
+    """Decode a response body; ``None`` when the encoding is not supported."""
+    encodings = [e.strip().lower() for e in content_encoding.split(",") if e.strip()]
+    data = body
+    # Content-Encoding lists codings in application order; undo them in reverse.
+    for encoding in reversed(encodings):
+        match encoding:
+            case "identity":
+                continue
+            case "gzip" | "x-gzip":
+                try:
+                    data = zlib.decompress(data, wbits=zlib.MAX_WBITS | 16)
+                except zlib.error:
+                    return None
+            case "deflate":
+                try:
+                    data = zlib.decompress(data)
+                except zlib.error:
+                    try:
+                        data = zlib.decompress(data, wbits=-zlib.MAX_WBITS)
+                    except zlib.error:
+                        return None
+            case _:
+                return None
+    return data
+
+
+def inject_stylesheet(html: bytes) -> bytes:
+    """Insert the share-view stylesheet link into an HTML document (idempotent)."""
+    if SHARE_VIEW_STYLESHEET_HREF.encode("ascii") in html:
+        return html
+    close = _HEAD_CLOSE.search(html)
+    if close is not None:
+        return html[: close.start()] + _SHARE_VIEW_LINK + html[close.start():]
+    open_tag = _HEAD_OPEN.search(html)
+    if open_tag is not None:
+        return html[: open_tag.end()] + _SHARE_VIEW_LINK + html[open_tag.end():]
+    return _SHARE_VIEW_LINK + html

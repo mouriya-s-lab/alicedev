@@ -18,8 +18,10 @@ COOKIE_NAME = "alicedev_s"
 COOKIE_MAX_AGE = 2_592_000  # 30 days
 TOKEN_TTL_MAX = 21_600  # six hours
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{20,}$")
-_BASE_TARGET_PATTERN = re.compile(
-    r"^/h/[^/]+/workspace/[^/?]+\?open=agent%3A[^&]+$"
+# Share targets (ARCHITECTURE §8): the latest agent of a session, or a bare
+# workspace when the session has no agent yet.  No paseo-private parameters.
+_TARGET_PATTERN = re.compile(
+    r"^/h/[^/?#&]+/workspace/[^/?#&]+(?:\?open=agent%3A[^/?#&]+)?$"
 )
 _REPORT_ID_PATTERN = re.compile(r"^r_[a-z2-7]{26}$")
 
@@ -55,10 +57,7 @@ class TokenTable:
     def validate_target(target: str) -> bool:
         if not isinstance(target, str):
             return False
-        base_target = target.removesuffix("&embed=1")
-        return bool(_BASE_TARGET_PATTERN.fullmatch(base_target)) and (
-            target == base_target or target == f"{base_target}&embed=1"
-        )
+        return bool(_TARGET_PATTERN.fullmatch(target))
 
     @staticmethod
     def validate_token(token: str) -> bool:

@@ -23,7 +23,11 @@ from .tokens import COOKIE_NAME, COOKIE_MAX_AGE, SignedCookieCodec, TokenTable
 
 _LOGGER = logging.getLogger("alicedev_gateway.access")
 _SWEEP_INTERVAL_SECONDS = 60.0
-_STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css"})
+_STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css", "paseo-view.css"})
+# Public, cookie-free prefixes (ARCHITECTURE §8): reports are bearer URLs and
+# static assets carry no secrets (the share-view stylesheet must load for any
+# page the proxy serves).
+_PUBLIC_GET_PREFIXES = ("/_alicedev/r/", "/_alicedev/static/")
 _PREVIEW_SCRIPT = 'document.getElementById("redeem").submit();'
 _PREVIEW_SCRIPT_HASH = base64.b64encode(
     hashlib.sha256(_PREVIEW_SCRIPT.encode("utf-8")).digest()
@@ -146,6 +150,10 @@ async def cookie_gate_middleware(
     if path.startswith("/t/"):
         if request.method not in {"GET", "HEAD", "POST"}:
             raise web.HTTPMethodNotAllowed(request.method, {"GET", "HEAD", "POST"})
+        return await handler(request)
+    if path.startswith(_PUBLIC_GET_PREFIXES):
+        if request.method not in {"GET", "HEAD"}:
+            raise web.HTTPMethodNotAllowed(request.method, {"GET", "HEAD"})
         return await handler(request)
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
@@ -319,6 +327,8 @@ async def static_asset(request: web.Request) -> web.StreamResponse:
 
 
 async def proxy(request: web.Request) -> web.StreamResponse:
+    # Unmatched /_alicedev/ paths (e.g. /_alicedev/r/<bad shape>) must not reach
+    # paseo; the cookie gate already lets the public prefixes through.
     if (
         request.path.startswith("/_alicedev/")
         or request.path.startswith("/t/")
