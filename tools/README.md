@@ -15,7 +15,7 @@ Shims and operator CLIs. Contracts are in `ARCHITECTURE.md` (§4 paseo CLI, §7 
 
 ## Deploy (`deployctl`, `deployrun`)
 
-The checkout lives at `/srv/alicedev/app` on the host and is mounted at `/deploy/app` in the paseo container; AstrBot mounts its `bot/` and `templates/`. It is owned by uid 1000.
+The checkout lives at `/srv/alicedev/app` on the host and is mounted at `/deploy/app` in the paseo container; AstrBot mounts its `bot/` and `templates/`. It is owned by uid 1000 (`paseo` in the paseo container); `apply` / `run` / `rollback` refuse to run as any other uid, so a root run cannot leave git files the owner can no longer rewrite (the e2e checkout follows the same rule).
 
 ```sh
 # inside alicedev-paseo (the upgrade-bot `deploying` state does this):

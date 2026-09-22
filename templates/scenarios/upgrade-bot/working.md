@@ -29,7 +29,7 @@
 1. **建 issue**：用 `gh issue create` 写清问题、范围和验收标准（中文）。记下 issue 编号。
 2. **实现**：在 worktree 里改代码并 commit。优先用 DSL 解决：新增或修改指令、回话、场景只改 `templates/`（ARCHITECTURE §3）；只有现有动作组合不出来时才改 `bot/` 代码。改动只能落在 `bot/` 与 `templates/`；一旦必须改 `deploy/`、`harness/`、`gateway/` 或其他目录，这不属于 bot 部署，立即报告 `needs_human`（reason 写明需要协同改哪些目录）。
 3. **测试**：跑 `bot/tests` 的 pytest；改了 DSL 就跑 `python -m alicedev.dsl check templates/`（在 `bot/` 目录下，或在 e2e 容器里对切换后的检出运行），必须零错误。
-4. **e2e before/after**：用常驻的 e2e 容器（`alicedev-e2e-astrbot`，经 `docker exec` 访问）和 `tools/e2e_driver.py`（先看 `--help` 与 `tools/README.md`）在**同一个冻结场景**下分别跑线上版本（main 的 `{{ repo.base_sha }}`）和你的候选 commit：走真实用户面（WebChat 经 agent-browser 截图；需要 Telegram 时经 `tgctl`）。渲染前清掉 t2i 与渲染缓存。每次截图标注会话号 %{{ session.no }}、两个 SHA、场景名、时间。
+4. **e2e before/after**：用常驻的 e2e 容器（`alicedev-e2e-astrbot`，经 `docker exec` 访问）和 `tools/e2e_driver.py`（先看 `--help` 与 `tools/README.md`；你已在 paseo 容器里，直接在自己的 shell 里运行它，不要 `docker exec` 进 `alicedev-paseo`——那会以 root 改写 e2e 检出，driver 会拒绝）在**同一个冻结场景**下分别跑线上版本（main 的 `{{ repo.base_sha }}`）和你的候选 commit：走真实用户面（WebChat 经 agent-browser 截图；需要 Telegram 时经 `tgctl`）。渲染前清掉 t2i 与渲染缓存。每次截图标注会话号 %{{ session.no }}、两个 SHA、场景名、时间。
 5. **判断是否收敛**：每一轮 e2e 记录失败项集合、错误签名集合和与目标的差距。只要失败项与错误签名在缩小、差距不增加且至少一项严格变好，就继续修；全部清零即通过。**连续 5 轮没有收敛**（在同一处打转、来回反复或越改越差）时停止，报告 `needs_human`，reason 写明每轮摘要。
 6. **开 PR**：push 分支，`gh pr create`，正文用 closing keyword 关联 issue（`Closes #<issue>`），写明改动、测试命令与结果、e2e 证据（截图链接或说明）。
 7. **说明图与证据图**：

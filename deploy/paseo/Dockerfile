@@ -69,15 +69,16 @@ RUN set -eux; \
     git config --system --add safe.directory '*'
 
 # Python toolchain for agents working on the alicedev repo: `python -m alicedev.dsl
-# check|card` and `pytest bot/tests` need the bot's dependencies.
+# check|card` and `pytest bot/tests` need the bot's dependencies. The venv leads
+# PATH for plain and login shells (/etc/profile resets PATH, hence profile.d).
 COPY bot/requirements.txt /tmp/alicedev-requirements.txt
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends python3-venv python3-pip; \
     python3 -m venv /opt/alicedev/pyenv; \
     /opt/alicedev/pyenv/bin/pip install --no-cache-dir -r /tmp/alicedev-requirements.txt pytest python-frontmatter; \
-    ln -sf /opt/alicedev/pyenv/bin/python /usr/local/bin/alicedev-python; \
     ln -sf /opt/alicedev/pyenv/bin/pytest /usr/local/bin/pytest; \
+    echo 'PATH=/opt/alicedev/pyenv/bin:$PATH; export PATH' > /etc/profile.d/alicedev-pyenv.sh; \
     rm -f /tmp/alicedev-requirements.txt; \
     rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/alicedev/pyenv/bin:$PATH
