@@ -242,11 +242,21 @@ class Browser:
         snapshot = self.snapshot()
         for _ in range(4):
             if "欢迎使用 AstrBot" in snapshot:
+                # A welcome dialog over the chat, or the welcome page a fresh
+                # config lands on after login (left through its "Chat" button).
                 close_ref = find_ref(snapshot, ("关闭",))
-                if close_ref is None:
-                    raise DriverError("welcome dialog has no close control")
-                self.cmd("click", close_ref)
-                self.cmd("wait", "300")
+                chat_ref = find_ref(snapshot, ('"Chat"',), "button")
+                if close_ref is not None:
+                    self.cmd("click", close_ref)
+                    self.cmd("wait", "300")
+                elif chat_ref is not None:
+                    self.cmd("click", chat_ref)
+                    deadline = time.monotonic() + 15
+                    while time.monotonic() < deadline and "#/welcome" in self.cmd("get", "url", timeout=30):
+                        self.cmd("wait", "500")
+                    self.cmd("wait", "--load", "networkidle", timeout=60)
+                else:
+                    raise DriverError("welcome dialog/page has no close or Chat control")
                 snapshot = self.snapshot()
                 continue
             if "修改账户" in snapshot:
