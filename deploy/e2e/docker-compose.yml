@@ -14,6 +14,26 @@
 name: alicedev-e2e
 
 services:
+  # Re-apply the seed config on every `up` (like production's astrbot-init):
+  # the data volume outlives the image, and AstrBot rewrites cmd_config.json at
+  # runtime, so baking the seed into the image would only reach a fresh volume.
+  init:
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
+    platform: linux/amd64
+    container_name: alicedev-e2e-init
+    restart: "no"
+    command:
+      - sh
+      - -ec
+      - >-
+        mkdir -p /data/config /data/plugin_data/alicedev/images /data/plugin_data/alicedev/reports &&
+        cp /seed/cmd_config.json /seed/mcp_server.json /data/ &&
+        cp /seed/config/alicedev_config.json /data/config/alicedev_config.json
+    volumes:
+      - e2e_astrbot_data:/data
+      - ./seed-data:/seed:ro
+    network_mode: none
+
   astrbot:
     build:
       context: ../..
@@ -33,6 +53,8 @@ services:
       - ${E2E_SRC_DIR:-../../../e2e-src}/templates:/AstrBot/alicedev-templates:ro
     networks: [e2e]
     depends_on:
+      init:
+        condition: service_completed_successfully
       t2i:
         condition: service_healthy
     healthcheck:
