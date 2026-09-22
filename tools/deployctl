@@ -262,7 +262,7 @@ def _deploy(target: Target, ref: str, *, failed_first: bool) -> dict[str, Any]:
     if os.geteuid() != owner:  # a root run leaves root-owned git files the owner cannot rewrite
         raise DeployError(
             f"{target.app} is owned by uid {owner}, running as uid {os.geteuid()}; "
-            f"run as the owner (in the paseo container: the default user, or docker exec -u paseo)"
+            f"run as the owner (an agent shell in the paseo container, or docker exec -u paseo)"
         )
     previous = _head(target.app)
     commit = _resolve(target, ref)
