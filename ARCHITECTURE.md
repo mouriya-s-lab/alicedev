@@ -347,7 +347,7 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重�
 
 **出队**：outbox worker 按 `chat_key` 先进先出取 `queued` 行 → 渲染（长文本转卡片、`image_template` 经 t2i；AI 的消息带会话标记 `%n 名称`，文字消息为前缀、卡片为角标，让群友知道是哪个会话、回复时该指哪个）→ 平台适配器发送 → 平台返回消息 id 时写 `outbound(platform_message_id → session_id)` → 标记 `sent`；发送失败标记 `failed` 并按退避重试。bot 重启或插件重载后继续消费未出队的行。出队至少一次：发送成功后、写 `sent` 前崩溃会重发。程序指令与调度自己的回话也以同样的行入队。
 
-**插件生命周期**：`initialize()`：加载并校验 DSL → 打开 Store（一次）→ 启动 aiohttp `TCPSite`（`reuse_port`）→ 启动 sweeper、outbox worker、调度（从 DuckDB 恢复未结束会话）；`generation` 自增。`terminate()`：标记 draining（`/v1/*` 返回 503）→ 等待在途请求 ≤10s → 取消并等待后台任务 → 关站 → 关 Store。插件热重载 = `terminate()` + 新代码 `initialize()`。reply-cli 遇 503/连接拒绝按 1,2,4,8s 重试至 30s。
+**插件生命周期**：`initialize()`：加载并校验 DSL → 打开 Store（一次）→ 启动 aiohttp `TCPSite`（`reuse_port`）→ 启动 sweeper、outbox worker、调度（从 DuckDB 恢复未结束会话）；`generation` 自增。`terminate()`：标记 draining（`/v1/*` 返回 503）→ 等待在途请求 ≤10s → 取消并等待后台任务 → 关站 → 关 Store。插件热重载 = `terminate()` + 新代码 `initialize()`；AstrBot 重载只清 `data.plugins.alicedev*` 的模块缓存，插件入口在导入前自行清掉插件自带的 `alicedev` 包，否则重载后仍跑旧代码。reply-cli 遇 503/连接拒绝按 1,2,4,8s 重试至 30s。
 
 ## 7. 调度：会话状态机
 
@@ -451,7 +451,7 @@ tokens_issued(token_id PK, session_id, user_key, issued_by, target, issued_at, e
 - paseo 镜像：上游 paseo 原样，不 fork、不改源码；alicedev 只叠加运行层 `deploy/paseo/Dockerfile`：`make harness` 产出的 `/opt/alicedev/{omp-extension,reply-cli}`、声明 `omp` 与 `omp-alicedev` provider 的 daemon 配置、entrypoint，以及 agent 需要的 `omp`（bun）、`git`、`gh`、docker CLI、agent-browser + Chromium、带 bot 依赖与 pytest 的 Python 环境（供 `python -m alicedev.dsl` 与测试）。基础镜像由 `docker/base/Dockerfile` 以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（网关的自托管 manifest 依赖它）。
 - astrbot 镜像：固定 digest 的上游 AstrBot，加 docker CLI 与预装的 `bot/requirements.txt` 依赖（`deploy/astrbot/Dockerfile`）；astrbot 与 paseo 都挂 `/var/run/docker.sock`，paseo 用户属宿主 docker 组（`DOCKER_GID`）。
 - astrbot 挂载：插件目录 `/AstrBot/data/plugins/alicedev` ← 检出的 `bot/`；`/AstrBot/alicedev-templates` ← 检出的 `templates/`。`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`）+ `t2i_endpoint=http://t2i:8999`。
-- **bot 与 DSL 交付**：宿主上一份由 `deployctl` 拥有的 alicedev git 检出，astrbot 挂载其中的 `bot/` 与 `templates/`。部署 = 检出切到 main 上的目标 SHA + AstrBot 插件热重载（`terminate()` + `initialize()`，不重启容器，平台连接不断）；`requirements.txt` 或平台配置变化时改为 `restart astrbot`。回滚 = 切回上一 SHA 再重载。paseo 不动。`deployctl` 触发重载的程序化入口以实测为准（WebUI `Extensions → Plugins → Reload Extension` 是现行人工流程）。
+- **bot 与 DSL 交付**：宿主上一份由 `deployctl` 拥有的 alicedev git 检出，astrbot 挂载其中的 `bot/` 与 `templates/`。部署 = 检出切到 main 上的目标 SHA + AstrBot 插件热重载（`terminate()` + `initialize()`，不重启容器，平台连接不断）；`requirements.txt` 或平台配置变化时改为 `restart astrbot`。回滚 = 切回上一 SHA 再重载。paseo 不动。重载入口是 AstrBot dashboard 的 `POST /api/v1/plugins/alicedev/reload`（插件上次加载失败时为 `/api/v1/plugins/failed/alicedev/reload`），以带插件权限的 API key（`X-API-Key`，`.env` 的 `ASTRBOT_API_KEY`）认证。
 - **交付范围**：bot 部署交付 `bot/` 与 `templates/`（新增或修改指令、场景、卡片随之上线）。`deploy/` 由 IaC 落地，`harness/` 随 paseo 镜像构建，`gateway/` 随网关镜像构建；改动触及这些目录时不属 bot 部署，需协同。
 - `e2e`（`deploy/e2e/`）：独立 compose 项目，常驻；被测的 `bot/` 与 `templates/` 由 agent 切到指定 SHA 后热重载插件；独立网络与卷，端口只绑 loopback；不持有生产 QQ/TG/paseo 凭据。`tg-cli`（`deploy/tg-cli/`）：独立 compose 项目，`restart: always`，Telegram 会话在命名卷；首次登录一次性人工完成。
 - DNS：`alicedev.237575.xyz` A 记录已手工建；runbook 记录迁入 `pve-vctcn/apps/dns` 的后续 issue。

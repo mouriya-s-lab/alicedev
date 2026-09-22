@@ -2,7 +2,10 @@
 
 AstrBot imports this module as ``data.plugins.alicedev.main``. The plugin
 directory is put on ``sys.path`` so the bundled ``alicedev`` package imports
-absolutely. ``initialize()`` wires config → store → DSL registry → paseo CLI
+absolutely. AstrBot's hot reload only purges ``data.plugins.alicedev*`` from
+``sys.modules``, so the bundled package is purged here before it is imported;
+otherwise a reload would keep running the previous revision's code.
+``initialize()`` wires config → store → DSL registry → paseo CLI
 control → outbox → scheduler → reply intake → internal API, then starts the
 outbox worker, idle sweeper and restart recovery.
 """
@@ -17,6 +20,8 @@ from pathlib import Path
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PLUGIN_DIR not in sys.path:
     sys.path.insert(0, _PLUGIN_DIR)
+for _name in [n for n in sys.modules if n == "alicedev" or n.startswith("alicedev.")]:
+    del sys.modules[_name]
 
 from astrbot.api.event import AstrMessageEvent, filter  # noqa: E402
 from astrbot.api.star import Context, Star, register  # noqa: E402
