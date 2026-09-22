@@ -54,7 +54,7 @@ make -C /srv/alicedev/app tg-up
 make -C /srv/alicedev/app fixed-main
 ```
 
-验证：`docker exec alicedev-astrbot docker exec alicedev-paseo paseo ls --json` 能返回；astrbot 日志出现 `alicedev initialized: … 0 DSL errors`；`/v1/health` 的 `revision` 等于检出 SHA。
+验证：`docker exec alicedev-astrbot docker exec -u paseo alicedev-paseo paseo ls --json` 能返回；astrbot 日志出现 `alicedev initialized: … 0 DSL errors`；`/v1/health` 的 `revision` 等于检出 SHA。
 
 ## 5. 日常变更
 

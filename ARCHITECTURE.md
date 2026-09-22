@@ -259,7 +259,7 @@ states:
 
 ## 4. bot → paseo 控制面（paseo CLI，经 shim）
 
-bot 侧 `PaseoControl`（`bot/alicedev/paseo/`）的每个操作 = 一次 `tools/paseoctl` 调用 = `docker exec alicedev-paseo paseo <cmd> … --json`。bot 只解析 CLI 的 JSON 输出。**具体参数与 JSON 形状以在 paseo 容器内 `paseo <cmd> --help` / `--json` 实测为准。**
+bot 侧 `PaseoControl`（`bot/alicedev/paseo/`）的每个操作 = 一次 `tools/paseoctl` 调用 = `docker exec -u paseo alicedev-paseo paseo <cmd> … --json`（以 daemon 自己的用户运行，`~/.paseo` 与 `/workspace` 的文件保持 uid 1000）。bot 只解析 CLI 的 JSON 输出。**具体参数与 JSON 形状以在 paseo 容器内 `paseo <cmd> --help` / `--json` 实测为准。**
 
 | 操作 | paseo CLI（均 `--json`；daemon 地址由 shim 固定；CLI 以 root 执行，`git` 类操作以 `paseo` 用户执行） |
 |---|---|

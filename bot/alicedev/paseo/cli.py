@@ -1,9 +1,9 @@
 """PaseoControl over the paseo CLI (ARCHITECTURE §4).
 
-Every operation is one ``docker exec <paseo container> paseo <cmd> … --json``
-(the ``paseoctl`` shim contract). The CLI runs as the container's default user,
-which owns the CLI client identity in ``~/.paseo``; git runs as ``paseo`` so
-files in ``/workspace`` keep uid 1000. No shell is involved: argv only.
+Every operation is one ``docker exec -u paseo <paseo container> paseo <cmd> … --json``
+(the ``paseoctl`` shim contract). CLI and git both run as the daemon's user
+``paseo`` so ``~/.paseo`` (including the CLI client identity) and ``/workspace``
+keep uid 1000. No shell is involved: argv only.
 """
 
 from __future__ import annotations
@@ -60,8 +60,12 @@ class CliPaseoControl(PaseoControl):
 
     # --- plumbing ------------------------------------------------------------
 
+    def _exec(self, *args: str) -> list[str]:
+        # As the daemon's own user: a root exec leaves root-owned files in /home/paseo.
+        return [self._docker, "exec", "-u", "paseo", self._container, *args]
+
     async def _paseo_json(self, *args: str, timeout: float | None = None) -> object:
-        argv = [self._docker, "exec", self._container, self._paseo, *args, "--json"]
+        argv = self._exec(self._paseo, *args, "--json")
         rc, out, err = await self._runner(argv, timeout or self._timeout)
         try:
             doc = cli_json.loads(out)
@@ -110,8 +114,7 @@ class CliPaseoControl(PaseoControl):
 
     async def send(self, agent_id: str, text: str) -> None:
         # --no-wait: send returns once queued; the default blocks until the turn ends.
-        argv = [self._docker, "exec", self._container, self._paseo, "send", "--no-wait",
-                agent_id, "--prompt", text]
+        argv = self._exec(self._paseo, "send", "--no-wait", agent_id, "--prompt", text)
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo send exited {rc}: {(err or out).strip()[:500]}")
@@ -126,15 +129,14 @@ class CliPaseoControl(PaseoControl):
     async def close(self, agent_id: str) -> None:
         # paseo 0.8.0 has no "release runtime" verb; stop interrupts a running turn and
         # is a no-op for idle agents, which is the only case the sweeper closes.
-        argv = [self._docker, "exec", self._container, self._paseo, "stop", agent_id]
+        argv = self._exec(self._paseo, "stop", agent_id)
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo stop exited {rc}: {(err or out).strip()[:500]}")
 
     async def archive(self, agent_id: str) -> None:
         # --force: ending a session archives its agents even mid-turn.
-        argv = [self._docker, "exec", self._container, self._paseo, "archive", "--force",
-                agent_id]
+        argv = self._exec(self._paseo, "archive", "--force", agent_id)
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo archive exited {rc}: {(err or out).strip()[:500]}")
@@ -163,8 +165,7 @@ class CliPaseoControl(PaseoControl):
             raise PaseoError(str(exc)) from exc
 
     async def workspace_archive(self, workspace_id: str) -> None:
-        argv = [self._docker, "exec", self._container, self._paseo, "workspace", "archive",
-                workspace_id]
+        argv = self._exec(self._paseo, "workspace", "archive", workspace_id)
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo workspace archive exited {rc}: {(err or out).strip()[:500]}")
@@ -180,6 +181,6 @@ class CliPaseoControl(PaseoControl):
     # --- git ---------------------------------------------------------------------
 
     async def git(self, repo: str, *args: str) -> GitResult:
-        argv = [self._docker, "exec", "-u", "paseo", self._container, "git", "-C", repo, *args]
+        argv = self._exec("git", "-C", repo, *args)
         rc, out, err = await self._runner(argv, 300.0)
         return GitResult(returncode=rc, stdout=out, stderr=err)

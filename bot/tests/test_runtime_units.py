@@ -47,7 +47,7 @@ def test_cli_control_argv() -> None:
 
     async def runner(argv, timeout):
         calls.append(list(argv))
-        verb = argv[4] if argv[2] != "-u" else "git"
+        verb = argv[6] if argv[5] == "paseo" else argv[5]  # docker exec -u paseo <c> <bin> <verb>
         return 0, replies.get(verb, ""), ""
 
     async def main() -> None:
@@ -55,24 +55,24 @@ def test_cli_control_argv() -> None:
         h = await c.create(agent_ref="a_x", provider="omp/m", cwd="/w", title="t",
                            initial_prompt="/chat_ingress {}", workspace_id="ws1")
         assert (h.workspace_id, h.server_id) == ("ws1", "srv-abc")
-        assert calls[0] == ["docker", "exec", "pc", "paseo", "run", "/chat_ingress {}", "--background",
+        assert calls[0] == ["docker", "exec", "-u", "paseo", "pc", "paseo", "run", "/chat_ingress {}", "--background",
                             "--provider", "omp/m", "--cwd", "/w", "--title", "t",
                             "--label", "alicedev=a_x", "--workspace", "ws1", "--json"]
         await c.send("ag1", "/chat_ingress {}")
-        assert calls[-1] == ["docker", "exec", "pc", "paseo", "send", "--no-wait", "ag1",
+        assert calls[-1] == ["docker", "exec", "-u", "paseo", "pc", "paseo", "send", "--no-wait", "ag1",
                              "--prompt", "/chat_ingress {}"]
         assert (await c.find_by_label("a_x")).agent_id.startswith("4be1c0de")
-        assert calls[-1][4:] == ["ls", "-a", "-g", "--label", "alicedev=a_x", "--json"]
+        assert calls[-1][6:] == ["ls", "-a", "-g", "--label", "alicedev=a_x", "--json"]
         assert await c.status("ag1") is AgentStatus.RUNNING
         await c.archive("ag1")
-        assert calls[-1][4:] == ["archive", "--force", "ag1"]
+        assert calls[-1][6:] == ["archive", "--force", "ag1"]
         await c.worktree_create(repo="/workspace/alicedev", base_ref="main", slug="s12")
-        assert calls[-1][4:] == ["workspace", "create", "--isolation", "worktree", "--path",
+        assert calls[-1][6:] == ["workspace", "create", "--isolation", "worktree", "--path",
                                  "/workspace/alicedev", "--mode", "branch-off", "--base", "main",
                                  "--worktree-slug", "s12", "--new-branch", "alicedev/s12",
                                  "--title", "s12", "--json"]
         await c.workspace_local("/workspace/openalice", "需求")
-        assert calls[-1][4:9] == ["workspace", "create", "--isolation", "local", "--path"]
+        assert calls[-1][6:11] == ["workspace", "create", "--isolation", "local", "--path"]
         await c.git("/workspace/alicedev", "rev-parse", "HEAD")
         assert calls[-1] == ["docker", "exec", "-u", "paseo", "pc", "git", "-C",
                              "/workspace/alicedev", "rev-parse", "HEAD"]
