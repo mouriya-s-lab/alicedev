@@ -23,7 +23,7 @@ session_rename.ok: "%{{ session.no }} 已改名为「{{ session.name }}」"
 session_rename.not_found: "找不到这个会话。"
 session_archive.ok: "已归档 %{{ session.no }} {{ session.name }}"
 session_archive.not_found: "找不到这个会话。"
-human.ok: "%{{ session.no }} 已处理：{{ session.state }}"
+human.ok: ""  # 进入的状态的 state.<状态名> 文字就是回话
 human.not_found: "找不到这个会话。"
 human.not_allowed: "%{{ session.no }} 现在不能执行这个操作（{{ session.state }}）。"
 share.ok: ""
@@ -40,6 +40,7 @@ usage_error: "{{ error }}\n用法：{{ usage }}"
 internal_error: "处理失败：{% if reason %}{{ reason }}{% else %}内部错误，请稍后再试。{% endif %}"
 
 # --- 会话进入某状态、但不是由 AI 回复触发时（调度或人工指令）的文字；state.<状态名> 覆盖默认 ---
+# 人工指令（human 动作）的回话就是它进入的状态的这条文字。
 state.default: "%{{ session.no }} {{ session.name }}：{{ session.state }}"
 state.main_sync_failed: "%{{ session.no }} 没能开始：main 的对齐副本无法快进（{{ reason }}），需要人工清理。{% if link %}\n{{ link }}{% endif %}"
 state.failed: "%{{ session.no }} 创建 AI 失败：{{ reason }}"

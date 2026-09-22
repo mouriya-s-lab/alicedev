@@ -263,8 +263,7 @@ def test_upgrade_bot_full_cycle(tmp_path: Path) -> None:
         # Human approve (admin; quoted approval message resolves %1).
         await env.dispatcher.handle(inbound("/升级bot approve", user=ADMIN,
                                             quoted=quote_of("%1 升级 · 加 /ping\n候选就绪")))
-        texts = await env.texts()
-        assert "%1 已处理：deploying" in texts
+        assert await env.texts() == ["%1 已批准，开始 merge 并部署。"]
         deploy = env.paseo.created[1]
         assert (await env.agents.get(deploy["agent_ref"])).state == "deploying"
         assert '"commit": "c1"' in ingress(deploy["prompt"])["text"] or "c1" in ingress(deploy["prompt"])["text"]
@@ -321,8 +320,7 @@ def test_needs_human_share_link_follows_ai_reply(tmp_path: Path) -> None:
         assert res.status == 202
         assert await env.texts() == ["%1 升级 · x\n需要人工", "https://dev.example/t/t1"]
         await env.dispatcher.handle(inbound("/升级bot reject %1", user=ADMIN))
-        texts = await env.texts()
-        assert "%1 已拒绝，会话结束。" in texts
+        assert await env.texts() == ["%1 已拒绝，会话结束。"]
         assert (await env.sessions.by_no(CHAT, 1)).state == "rejected"
         await env.close()
 

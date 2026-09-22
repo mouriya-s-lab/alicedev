@@ -325,6 +325,8 @@ class Scheduler:
         match state:
             case AgentState():
                 assert scenario is not None
+                if by is EnteredBy.HUMAN:  # the state text is the human command's reply
+                    await self._state_notice(row, reason, share=False)
                 ok, why = await self._start_agent(row, scenario, state, trigger_msg_ref)
                 if not ok:
                     await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason=why)

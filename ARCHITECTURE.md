@@ -240,7 +240,7 @@ states:
 
 **可见状态** = human、terminal、对话态 agent；只有进入可见状态或在对话态里的回复会进聊天面。
 
-`data`：进入该状态时 `transition.data` 必须带的键，累积进会话 `data`。human/terminal 状态的 `reply` 规格约束 AI 报告进入它时附带的那条消息；由调度或人工指令进入时，消息是 `messages.yaml` 里的固定文字。`share: true`：进入该状态时 bot 为会话创建者签发一次性 paseo 链接（§8），附在这条消息后面；AI 不签发链接。
+`data`：进入该状态时 `transition.data` 必须带的键，累积进会话 `data`。human/terminal 状态的 `reply` 规格约束 AI 报告进入它时附带的那条消息；由调度或人工指令进入时，消息是 `messages.yaml` 里的固定文字（`state.<状态名>`，缺省 `state.default`；人工指令进入 agent 状态同样发这条），它就是该人工指令的回话，`human.ok` 默认为空。`share: true`：进入该状态时 bot 为会话创建者签发一次性 paseo 链接（§8），附在这条消息后面；AI 不签发链接。
 
 **内建状态**（所有场景共有）：`queued`（等待派发）、`main_sync_failed`（terminal，`share: true`，派发时 fixed-main 对齐失败，仅 `repo` 场景）、`failed`（terminal，进入某个 agent 状态时 agent 创建失败，附原因）、`archived`（terminal，`session_archive` 从任意未结束状态进入）。
 
