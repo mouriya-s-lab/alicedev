@@ -58,7 +58,7 @@ python3 /deploy/app/tools/e2e_driver.py run \
   --message '/alicedev' --output <reports_dir>/e2e
 ```
 
-Per side: move the checkout (deployctl, `restart` activation — AstrBot and t2i are restarted, which also clears render caches), verify the revision, log into WebChat with agent-browser (`E2E_DASHBOARD_PASSWORD`), send the messages, wait for the reply to render, screenshot. Output: `request.json`, `{baseline,candidate}/{run.json,capture.png,browser.log}`, `metric.json` (`F`, `E`, `d`), `evidence.json`. The e2e stack has no paseo and no production credentials: AI commands are validated on production, the e2e stack covers program commands, rendering and DSL.
+Per side: move the checkout (deployctl, `restart` activation — AstrBot and t2i are restarted, which also clears render caches), verify the revision, log into WebChat with agent-browser (`E2E_DASHBOARD_PASSWORD`), send the messages, wait for each reply, screenshot. Bot replies are proactive (outbox) messages that WebChat stores in the conversation history rather than the request stream, so the driver reloads the conversation until the reply (text or image) appears and holds across two reloads. Output: `request.json`, `{baseline,candidate}/{run.json,capture.png,browser.log}`, `metric.json` (`F`, `E`, `d`), `evidence.json`. The e2e stack has no paseo and no production credentials: AI commands are validated on production, the e2e stack covers program commands, rendering and DSL.
 
 ## Telegram (`tgctl`, `tg-approve-login`)
 

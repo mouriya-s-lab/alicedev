@@ -162,6 +162,9 @@ def activate(opts: Options, sha: str, deployctl: Any) -> str:
 # --- browser ---------------------------------------------------------------------
 
 
+_CLOCK = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)?", re.I)
+
+
 def extract_ref(line: str) -> str | None:
     match = re.search(r"ref=@?([A-Za-z0-9_-]+)", line)
     return f"@{match.group(1)}" if match else None
@@ -198,27 +201,42 @@ class Browser:
     def body(self) -> str:
         return self.cmd("get", "text", "body", check=False).strip()
 
-    def login_needed(self, snapshot: str) -> bool:
-        return "登录" in snapshot and ("用户名" in snapshot or "password" in snapshot.lower() or "密码" in snapshot)
+    def on_login_page(self) -> bool:
+        return "#/auth/login" in self.cmd("get", "url", timeout=30)
+
+    def login_form(self) -> tuple[str, str, str]:
+        """Refs of (username, password, submit) once the form is interactive.
+
+        The fields are taken in order: their labels disappear once they hold a
+        value, and they stay disabled while the page initializes or submits."""
+        deadline = time.monotonic() + 30
+        snapshot = ""
+        while time.monotonic() < deadline:
+            snapshot = self.snapshot()
+            boxes = [line for line in snapshot.splitlines() if "textbox" in line.lower()]
+            submit = find_ref(snapshot, ("登录",), "button")
+            if len(boxes) >= 2 and submit and not any("disabled" in line for line in boxes[:2]):
+                user, password = extract_ref(boxes[0]), extract_ref(boxes[1])
+                if user and password:
+                    return user, password, submit
+            self.cmd("wait", "500")
+        raise DriverError(f"login form never became interactive: {snapshot[-1500:]}")
 
     def login(self, chat_url: str) -> None:
         for password in self.opts.passwords:
-            snapshot = self.snapshot()
-            if not self.login_needed(snapshot):
+            if not self.on_login_page():
                 return
-            user_ref = find_ref(snapshot, ("用户名", "username"), "textbox")
-            password_ref = find_ref(snapshot, ("密码", "password"), "textbox")
-            login_ref = find_ref(snapshot, ("登录",), "button")
-            if not (user_ref and password_ref and login_ref):
-                raise DriverError(f"login form controls missing: {snapshot[-1500:]}")
+            user_ref, password_ref, submit_ref = self.login_form()
             self.cmd("fill", user_ref, self.opts.user)
             self.cmd("fill", password_ref, password)
-            self.cmd("click", login_ref)
-            self.cmd("wait", "1500")
-            self.cmd("open", chat_url)
-            self.cmd("wait", "--load", "networkidle", timeout=60)
-        if self.login_needed(self.snapshot()):
+            self.cmd("click", submit_ref)
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and self.on_login_page():
+                self.cmd("wait", "500")
+        if self.on_login_page():
             raise DriverError("dashboard login failed with every configured password")
+        self.cmd("open", chat_url)
+        self.cmd("wait", "--load", "networkidle", timeout=60)
 
     def dismiss_overlays(self) -> str:
         snapshot = self.snapshot()
@@ -249,27 +267,48 @@ class Browser:
             return snapshot
         raise DriverError("WebChat welcome/account overlays did not clear")
 
+    def page_state(self) -> tuple[str, int]:
+        """Visible text and number of rendered images."""
+        raw = self.cmd("eval", "JSON.stringify([document.body.innerText, document.querySelectorAll('img').length])")
+        try:
+            value = json.loads(raw.strip())
+            text, images = json.loads(value) if isinstance(value, str) else value
+        except (ValueError, TypeError) as exc:
+            raise DriverError(f"unexpected page state from eval: {raw[-300:]}") from exc
+        return str(text), int(images)
+
+    @staticmethod
+    def reply_text(body: str, message: str) -> str:
+        """Text after the last ``message`` bubble, without timestamps and avatar glyphs."""
+        tail = body.rsplit(message, 1)[-1] if message in body else ""
+        lines = (line.strip() for line in tail.splitlines())
+        return "\n".join(line for line in lines if line and line != "✦" and not _CLOCK.fullmatch(line))
+
     def send_and_wait(self, message: str) -> str:
+        """Send ``message`` and return the page text once the bot's reply is shown.
+
+        Bot replies arrive as proactive messages (the outbox), which WebChat
+        persists into the conversation history instead of the request's stream,
+        so the conversation is reloaded until the reply (text or image) appears
+        and stays unchanged across two reloads."""
         snapshot = self.dismiss_overlays()
         input_ref, send_ref = find_composer(snapshot)
         if input_ref is None or send_ref is None:
             raise DriverError(f"cannot find WebChat composer: {snapshot[-1500:]}")
-        before = self.body()
+        _, images_before = self.page_state()
         self.cmd("fill", input_ref, message)
         self.cmd("click", send_ref)
         deadline = time.monotonic() + self.opts.reply_timeout
-        stable_since, last = None, ""
+        last: tuple[str, int] | None = None
         while time.monotonic() < deadline:
-            time.sleep(1.5)
-            body = self.body()
-            grown = len(body) > len(before) + len(message)
-            if grown and body == last:
-                stable_since = stable_since or time.monotonic()
-                if time.monotonic() - stable_since >= 3:
-                    return body
-            else:
-                stable_since = None
-            last = body
+            time.sleep(2)
+            self.cmd("reload")
+            self.cmd("wait", "--load", "networkidle", timeout=60)
+            body, images = self.page_state()
+            seen = (self.reply_text(body, message), images)
+            if (seen[0] or images > images_before) and seen == last:
+                return body
+            last = seen
         raise DriverError(f"no bot reply rendered for {message!r} within {self.opts.reply_timeout:.0f}s")
 
 
