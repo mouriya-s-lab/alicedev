@@ -9,11 +9,11 @@ CommandRegistry, then starts the internal API and idle sweeper.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import uuid
-from pathlib import Path
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PLUGIN_DIR not in sys.path:
@@ -40,6 +40,7 @@ from alicedev.commands.context import Services  # noqa: E402
 from alicedev.commands.dispatch import CommandDispatcher  # noqa: E402
 from alicedev.commands.registry import CommandRegistry  # noqa: E402
 from alicedev.config import PluginConfig  # noqa: E402
+from alicedev.paseo.daemon_ws import WSDaemonControl  # noqa: E402
 from alicedev.paseo.mcp import MCPPaseoControl  # noqa: E402
 from alicedev.paseo.session_actor import SessionActor  # noqa: E402
 from alicedev.paseo.sweeper import IdleSweeper  # noqa: E402
@@ -47,7 +48,15 @@ from alicedev.reports import ReportPublisher  # noqa: E402
 from alicedev.store.db import Store  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
+from alicedev.store.upgrade_runs_repo import UpgradeRunsRepo  # noqa: E402
 from alicedev.templates.registry import TemplateRegistry  # noqa: E402
+from alicedev.upgrade import (  # noqa: E402
+    CandidateReadyPayload,
+    DeployResultPayload,
+    E2ENotConvergingPayload,
+    MainSyncFailedPayload,
+    UpgradeConductor as UpgradeDriver,
+)
 
 _LOG = logging.getLogger("alicedev")
 
@@ -101,6 +110,76 @@ class _ContextSender:
         return [f"alicedev-{uuid.uuid4().hex}"]
 
 
+class _UpgradeEventSink:
+    """Deliver the conductor's four typed boundary events to the chat layer."""
+
+    def __init__(
+        self,
+        *,
+        sender: _ContextSender,
+        runs: UpgradeRunsRepo,
+        renderer: ReplyRenderer,
+    ) -> None:
+        self._sender = sender
+        self._runs = runs
+        self._renderer = renderer
+
+    async def _chat(self, run_id: str) -> str:
+        record = await self._runs.get(run_id)
+        if record is None:
+            raise RuntimeError(f"upgrade run disappeared before event delivery: {run_id}")
+        return record.chat_key
+
+    async def candidate_ready(self, run_id: str, payload: CandidateReadyPayload) -> None:
+        from astrbot.api.message_components import Plain
+
+        components: list = [
+            Plain(
+                f"候选已就绪：{run_id}\n"
+                f"candidate commit：{payload.commit}\n"
+                f"批准：/升级bot approve {run_id} {payload.commit}\n"
+                f"拒绝：/升级bot reject {run_id}"
+            )
+        ]
+        for image in (payload.explain_img, payload.evidence_img):
+            if image:
+                components.append(self._renderer.render_inline_image(image))
+        await self._sender.send(await self._chat(run_id), components)
+
+    async def main_sync_failed(self, run_id: str, payload: MainSyncFailedPayload) -> None:
+        from astrbot.api.message_components import Plain
+
+        text = f"升级运行 {run_id}：fixed-main 对齐失败。\n{payload.reason}"
+        if payload.paseo_link:
+            text += f"\nPaseo：{payload.paseo_link}"
+        await self._sender.send(await self._chat(run_id), [Plain(text)])
+
+    async def e2e_not_converging(self, run_id: str, payload: E2ENotConvergingPayload) -> None:
+        from astrbot.api.message_components import Plain
+
+        summary = json.dumps(
+            [round_summary.as_dict() for round_summary in payload.round_summaries],
+            ensure_ascii=False,
+        )
+        text = f"升级运行 {run_id}：E2E 连续 5 轮未收敛。\n{summary}"
+        if payload.paseo_link:
+            text += f"\nPaseo：{payload.paseo_link}"
+        await self._sender.send(await self._chat(run_id), [Plain(text)])
+
+    async def deploy_result(self, run_id: str, payload: DeployResultPayload) -> None:
+        from astrbot.api.message_components import Plain
+
+        labels = {
+            "active": "已上线并核实运行",
+            "rolled_back": "核实失败，已自动回滚",
+            "rollback_failed": "核实失败且自动回滚失败，需要人工介入",
+        }
+        text = f"升级运行 {run_id}：{labels.get(payload.outcome, payload.outcome)}。"
+        if payload.paseo_link:
+            text += f"\nPaseo：{payload.paseo_link}"
+        await self._sender.send(await self._chat(run_id), [Plain(text)])
+
+
 @register("alicedev", "mouriya-s-lab", "QQ 群 <-> paseo 开发环境桥接", "0.1.0")
 class AliceDevPlugin(Star):
     def __init__(self, context: Context, config=None) -> None:
@@ -109,6 +188,7 @@ class AliceDevPlugin(Star):
         self._config: PluginConfig | None = None
         self._store: Store | None = None
         self._paseo: MCPPaseoControl | None = None
+        self._upgrade_daemon: WSDaemonControl | None = None
         self._sessions_actor: SessionActor | None = None
         self._sweeper: IdleSweeper | None = None
         self._api: InternalApi | None = None
@@ -145,20 +225,46 @@ class AliceDevPlugin(Star):
         render = _optional_card_renderer(self, config.templates_root)
         gateway = _optional_gateway_client(config)
         github = _optional_github_client(config)
-        conductor = upgrade.StubUpgradeConductor()
         reports = ReportPublisher(store=store, config=config)
         renderer = ReplyRenderer(
             config=config, templates=templates, render=render, reports=reports
+        )
+        sender = _ContextSender(self.context)
+        upgrade_runs = UpgradeRunsRepo(store)
+        upgrade_daemon = WSDaemonControl(
+            base_url=config.paseo_url,
+            password=config.paseo_password,
+        )
+        self._upgrade_daemon = upgrade_daemon
+        conductor = UpgradeDriver(
+            daemon=upgrade_daemon,
+            repo=upgrade_runs,
+            event_sink=_UpgradeEventSink(
+                sender=sender,
+                runs=upgrade_runs,
+                renderer=renderer,
+            ),
+            fixed_main=config.paseo_cwd,
+            deploy_target="/srv/alicedev/bot",
+            provider=config.paseo_provider,
+            paseo_link=lambda workspace_id: (
+                (
+                    f"{config.public_base_url.rstrip('/')}/workspace/{workspace_id}"
+                    if workspace_id
+                    else f"{config.public_base_url.rstrip('/')}/workspace/alicedev"
+                )
+                if config.public_base_url
+                else ""
+            ),
         )
 
         registry = CommandRegistry()
 
         api = InternalApi(
             config=config, store=store, sessions=sessions_repo, templates=templates,
-            commands=registry, renderer=renderer, sender=_ContextSender(self.context),
+            commands=registry, renderer=renderer, sender=sender,
             platforms_fn=self._platform_names,
         )
-        self._api = api
         services = Services(
             store=store, templates=templates, paseo=paseo, sessions=actor,
             render=render, gateway=gateway, github=github, config=config,
@@ -203,6 +309,8 @@ class AliceDevPlugin(Star):
             await self._api.stop()
         if self._sweeper is not None:
             await self._sweeper.stop()
+        if self._upgrade_daemon is not None:
+            await self._upgrade_daemon.aclose()
         if self._paseo is not None:
             await self._paseo.aclose()
         if self._store is not None:

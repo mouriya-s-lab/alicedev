@@ -89,3 +89,64 @@ class PaseoControl(abc.ABC):
 
 
 LABEL_KEY = "alicedev"
+
+
+class WaitOutcome(str, Enum):
+    IDLE = "idle"
+    ERROR = "error"
+    PERMISSION = "permission"
+    TIMEOUT = "timeout"
+
+
+@dataclass(frozen=True)
+class WaitResult:
+    outcome: WaitOutcome
+    last_message: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
+class WorktreeRef:
+    workspace_id: str
+    cwd: str
+
+
+class DaemonControl(abc.ABC):
+    """WS /ws control plane for the ``/升级bot`` conductor."""
+
+    @abc.abstractmethod
+    async def connect(self) -> None:
+        """Establish the daemon WebSocket transport."""
+
+    @abc.abstractmethod
+    async def aclose(self) -> None:
+        """Tear down the daemon WebSocket transport."""
+
+    @abc.abstractmethod
+    async def worktree_create(self, *, repo_path: str, base_ref: str, name: str) -> WorktreeRef:
+        """Create a worktree workspace from ``base_ref`` and return its identity."""
+
+    @abc.abstractmethod
+    async def worktree_archive(self, workspace_id: str) -> None:
+        """Archive a worktree workspace."""
+
+    @abc.abstractmethod
+    async def agent_create(
+        self,
+        *,
+        workspace_id: str,
+        provider: str,
+        cwd: str,
+        title: str,
+        initial_prompt: str,
+        labels: dict[str, str],
+    ) -> str:
+        """Create an agent in ``workspace_id`` and return its ID."""
+
+    @abc.abstractmethod
+    async def agent_wait(self, agent_id: str, *, timeout_s: float) -> WaitResult:
+        """Wait for an agent turn to finish."""
+
+    @abc.abstractmethod
+    async def agent_status(self, agent_id: str) -> AgentStatus:
+        """Fetch the current status for an agent."""

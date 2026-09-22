@@ -1,9 +1,8 @@
 """``/升级bot`` command and the bot-to-conductor shim contract.
 
-The real conductor launcher lives outside the bot process.  Wave 1 keeps a
-small no-op implementation here so the command, state, and callback surfaces
-can be exercised in an isolated bot without starting paseo or touching
-production.
+The command layer owns parsing and user-facing text.  The in-process conductor
+is injected through ``Services`` and is the only component that advances an
+upgrade run or emits boundary events.
 """
 
 from __future__ import annotations
@@ -40,26 +39,9 @@ class UpgradeConductor(Protocol):
         """Reject one pending run."""
 
 
-class StubUpgradeConductor:
-    """Isolated Wave 1 implementation; the external paseo shim replaces this."""
-
-    async def start(self, *, prompt: str, chat_key: str, user_key: str) -> None:
-        _LOG.info(
-            "upgrade conductor start stub: prompt_chars=%d chat=%s user=%s",
-            len(prompt),
-            chat_key,
-            user_key,
-        )
-
-    async def approve(self, *, run_id: str, commit: str) -> None:
-        _LOG.info("upgrade conductor approve stub: run=%s commit=%s", run_id, commit)
-
-    async def reject(self, *, run_id: str) -> None:
-        _LOG.info("upgrade conductor reject stub: run=%s", run_id)
-
-
 def _repo(ctx: "CommandContext") -> UpgradeRunsRepo:
     return UpgradeRunsRepo(ctx.services.store)
+
 
 
 def _new_run_id() -> str:
@@ -108,7 +90,12 @@ async def _handle_start(ctx: "CommandContext", prompt_parts: list[str]) -> None:
         user_key=ctx.user_key,
         workspace_ref=workspace_ref,
     )
-    conductor = ctx.services.conductor or StubUpgradeConductor()
+    conductor = ctx.services.conductor
+    if conductor is None:
+        _LOG.error("upgrade conductor is not configured: run=%s", run_id)
+        await repo.mark_failed(run_id)
+        await ctx.reply_text(f"升级运行 {run_id} 启动失败，已记录为 failed。")
+        return
     try:
         await conductor.start(prompt=prompt, chat_key=ctx.chat_key, user_key=ctx.user_key)
     except Exception:  # noqa: BLE001 - keep the accepted row auditable
@@ -146,15 +133,16 @@ async def _handle_approve(ctx: "CommandContext", args: list[str]) -> None:
         await ctx.reply_text("用法：/升级bot approve <run_id> [candidate_commit]")
         return
 
-    conductor = ctx.services.conductor or StubUpgradeConductor()
+    conductor = ctx.services.conductor
+    if conductor is None:
+        _LOG.error("upgrade conductor is not configured: run=%s", run_id)
+        await ctx.reply_text("批准发送失败，候选仍可重试。")
+        return
     try:
         await conductor.approve(run_id=run_id, commit=candidate)
     except Exception:  # noqa: BLE001 - preserve candidate for retry
         _LOG.exception("upgrade approve failed: run=%s", run_id)
         await ctx.reply_text("批准发送失败，候选仍可重试。")
-        return
-    if not await repo.mark_deploying(run_id):
-        await ctx.reply_text("批准未生效：运行状态已变化，请重新查询。")
         return
     await ctx.reply_text(f"已批准运行 {run_id} 的 candidate commit {candidate}，进入 deploying。")
 
@@ -176,15 +164,16 @@ async def _handle_reject(ctx: "CommandContext", args: list[str]) -> None:
     ):
         await ctx.reply_text(f"运行 {run_id} 当前状态为 {record.status.value}，不能拒绝。")
         return
-    conductor = ctx.services.conductor or StubUpgradeConductor()
+    conductor = ctx.services.conductor
+    if conductor is None:
+        _LOG.error("upgrade conductor is not configured: run=%s", run_id)
+        await ctx.reply_text("拒绝发送失败，运行仍保持原状态。")
+        return
     try:
         await conductor.reject(run_id=run_id)
     except Exception:  # noqa: BLE001
         _LOG.exception("upgrade reject failed: run=%s", run_id)
         await ctx.reply_text("拒绝发送失败，运行仍保持原状态。")
-        return
-    if not await repo.reject(run_id):
-        await ctx.reply_text("拒绝未生效：运行状态已变化，请重新查询。")
         return
     await ctx.reply_text(f"已拒绝运行 {run_id}，状态为 failed。")
 

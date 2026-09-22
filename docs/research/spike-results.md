@@ -1,4 +1,4 @@
-# 垂直切片 spike 结果（ARCHITECTURE §14 step 1）
+# 垂直切片 spike 结果
 
 日期：2026-09-18。执行者：BridgeCore。所有结论均有运行时证据（下附命令/输出/文件引用）。截图见 `docs/evidence/spike/`。
 
