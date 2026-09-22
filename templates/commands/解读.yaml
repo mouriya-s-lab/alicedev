@@ -1,0 +1,19 @@
+# 预取 GitHub Issue/PR，按类型新开 github-issue 或 github-pr 会话。
+# 直接在群里发一个 issue/PR 链接也会走同样的流程（见 routes.yaml）。
+name: 解读
+type: ai
+aliases: [interpret]
+summary: 预取并解读一个 GitHub Issue 或 Pull Request
+usage: /解读 <链接>
+examples:
+  - /解读 https://github.com/TraderAlice/OpenAlice/issues/12
+  - "/解读 #12"
+permission: all
+args:
+  链接: github_ref
+do:
+  github:
+    ref: "{{ 链接 }}"
+    scenarios:
+      issue: github-issue
+      pr: github-pr

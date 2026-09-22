@@ -1,0 +1,16 @@
+# 新开一个 requirement 会话，把群友的需求交给 AI 分析。
+name: 需求
+type: ai
+aliases: [req]
+summary: 提一个需求，AI 分析可行性与范围
+usage: /需求 <内容>
+examples:
+  - /需求 希望收藏夹支持按作者筛选
+  - （引用一条消息）/需求 把这个做成指令
+permission: all
+args:
+  内容: text
+do:
+  start:
+    scenario: requirement
+    text: "{{ 内容 }}"

@@ -1,0 +1,15 @@
+# 非斜杠消息的处理，按顺序匹配第一条（ARCHITECTURE §3.3）。
+# 条件：github_link = 消息只有一个 GitHub issue/PR 链接；addressed = @bot 或私聊的自然消息。
+- when: github_link
+  do:
+    github:
+      ref: "{{ message }}"
+      scenarios:
+        issue: github-issue
+        pr: github-pr
+- when: addressed
+  do:
+    send:
+      text: "{{ message }}"
+  say:
+    not_found: 当前没有会话，请先用 /需求 或 /帮我调查 开始，或用 /会话列表 看看已有会话。

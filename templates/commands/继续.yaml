@@ -1,0 +1,22 @@
+# 把补充内容发到已有会话（不新开）。%n 指定会话；不写则取引用的 bot 消息所属会话，再退回本群当前会话。
+name: 继续
+type: ai
+aliases: [continue]
+summary: 向会话补充内容，唤醒 AI 继续
+usage: /继续 [%会话] <内容>
+examples:
+  - /继续 再看看移动端的情况
+  - /继续 %3 这个方案的风险呢
+  - （引用 AI 的回复）/继续 展开说说第二点
+permission: all
+args:
+  会话: session
+  内容: text
+do:
+  send:
+    session: 会话
+    text: |
+      群友「{{ sender.name }}」补充：
+      {{ 内容 }}
+say:
+  not_conversational: "%{{ session.no }} 现在不接受对话，可以用 /会话 %{{ session.no }} 看看它的状态。"

@@ -1,0 +1,48 @@
+# 各动作结果的默认回话与系统提示（ARCHITECTURE §3.1）。指令文件的 say 可以覆盖其中 <动作>.<结果>。
+# 可用变量：sender chat quoted images message，以及动作结果带出的
+#   session{no,name,state,label} reason id error usage command count link data
+# 不适用的变量为空（None），模板里用 {% if %} 判断。
+
+# --- AI 指令 ---
+start.created: "已开始 %{{ session.no }} {{ session.name }}"
+start.queued: "已排队 %{{ session.no }} {{ session.name }}：同类会话正在进行，前一个结束后自动开始。"
+start.failed: "%{{ session.no }} 创建失败：{{ reason }}"
+github.created: "已开始 %{{ session.no }} {{ session.name }}"
+github.fetch_failed: "读取 GitHub 内容失败，请检查链接或稍后再试。{% if reason %}（{{ reason }}）{% endif %}"
+github.failed: "%{{ session.no }} 创建失败：{{ reason }}"
+send.ok: ""
+send.not_found: "找不到这个会话。可以用 /会话列表 查看本群会话。"
+send.not_conversational: "%{{ session.no }} 现在不接受对话（{{ session.state }}）。"
+send.busy: "%{{ session.no }} 的 AI 还在处理上一条消息，稍后再试。"
+
+# --- 程序指令 ---
+session_show.not_found: "找不到这个会话。可以用 /会话列表 查看本群会话。"
+session_switch.ok: "当前会话已切换到 %{{ session.no }} {{ session.name }}"
+session_switch.not_found: "找不到这个会话。"
+session_rename.ok: "%{{ session.no }} 已改名为「{{ session.name }}」"
+session_rename.not_found: "找不到这个会话。"
+session_archive.ok: "已归档 %{{ session.no }} {{ session.name }}"
+session_archive.not_found: "找不到这个会话。"
+human.ok: "%{{ session.no }} 已处理：{{ session.state }}"
+human.not_found: "找不到这个会话。"
+human.not_allowed: "%{{ session.no }} 现在不能执行这个操作（{{ session.state }}）。"
+share.ok: ""
+share.not_found: "找不到这个会话。"
+share.not_ready: "%{{ session.no }} 还没有可以进入的 AI 工作区，稍后再试。"
+favorite.ok: "已收藏 #{{ id }}"
+favorite.image_failed: "收藏失败：引用消息中的图片无法下载。"
+list.empty: "没有可显示的内容。"
+help.not_found: "没有这条指令：{{ command }}。发送 /alicedev 查看全部指令。"
+
+# --- 系统 ---
+unknown_command: "未知指令：/{{ command }}。发送 /alicedev 查看帮助。"
+usage_error: "{{ error }}\n用法：{{ usage }}"
+internal_error: "处理失败：{% if reason %}{{ reason }}{% else %}内部错误，请稍后再试。{% endif %}"
+
+# --- 会话进入某状态、但不是由 AI 回复触发时（调度或人工指令）的文字；state.<状态名> 覆盖默认 ---
+state.default: "%{{ session.no }} {{ session.name }}：{{ session.state }}"
+state.main_sync_failed: "%{{ session.no }} 没能开始：main 的对齐副本无法快进（{{ reason }}），需要人工清理。{% if link %}\n{{ link }}{% endif %}"
+state.failed: "%{{ session.no }} 创建 AI 失败：{{ reason }}"
+state.archived: "已归档 %{{ session.no }} {{ session.name }}"
+state.rejected: "%{{ session.no }} 已拒绝，会话结束。"
+state.deploying: "%{{ session.no }} 已批准，开始 merge 并部署。"

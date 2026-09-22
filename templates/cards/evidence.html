@@ -1,0 +1,62 @@
+{#
+  证据图（/升级bot 审批用）：同一冻结场景下线上版本与候选版本的对比 + 测试结果。
+  fields（JSON）：
+    session        str   会话标记，如 "%3"
+    scenario       str   冻结场景名
+    captured_at    str   时间
+    baseline_sha   str   线上（main）SHA
+    candidate_sha  str   候选 SHA
+    before_image   str   线上版本截图（PNG 路径，渲染时转成内联图片）
+    after_image    str   候选版本截图（同上）
+    checks         [ {name: str, ok: bool, detail: str} ]   测试与 DSL 校验结果
+    rounds         int   e2e 轮数
+#}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; --wash:#f7f9fc; --ok:#18794e; --bad:#b42318; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:30px; background:var(--wash); color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:19px; line-height:1.45; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:22px 28px 18px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); font-size:17px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:28px; }
+    .meta { margin-top:6px; color:var(--muted); font-size:15px; font-family:"Menlo", monospace; }
+    main { padding:16px 22px 22px; }
+    .pair { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .shot .k { font-weight:700; font-size:16px; margin-bottom:6px; }
+    .shot img { width:100%; border:1px solid var(--line); border-radius:10px; }
+    h2 { margin:18px 0 6px; font-size:21px; }
+    .check { display:flex; gap:10px; padding:5px 0; border-bottom:1px solid var(--line); font-size:17px; }
+    .ok { color:var(--ok); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+    .detail { color:var(--muted); }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">alicedev · e2e 证据 {{ session }}</div>
+      <h1>{{ scenario }}</h1>
+      <div class="meta">main {{ baseline_sha[:12] }} → 候选 {{ candidate_sha[:12] }} · {{ captured_at }}{% if rounds %} · {{ rounds }} 轮{% endif %}</div>
+    </header>
+    <main>
+      <div class="pair">
+        <div class="shot"><div class="k">之前（线上）</div>{% if before_image %}<img src="{{ before_image }}" alt="before">{% endif %}</div>
+        <div class="shot"><div class="k">之后（候选）</div>{% if after_image %}<img src="{{ after_image }}" alt="after">{% endif %}</div>
+      </div>
+      {% if checks %}
+      <h2>测试结果</h2>
+      {% for c in checks %}<div class="check"><span class="{{ 'ok' if c.ok else 'bad' }}">{{ '通过' if c.ok else '失败' }}</span><span>{{ c.name }}</span><span class="detail">{{ c.detail }}</span></div>{% endfor %}
+      {% endif %}
+    </main>
+  </section>
+</body>
+</html>

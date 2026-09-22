@@ -18,13 +18,14 @@
     h1 { margin:4px 0 0; font-size:31px; line-height:1.25; }
     .subhead { margin-top:6px; color:var(--muted); font-size:17px; }
     main { padding:14px 20px 18px; }
-    .row { display:grid; grid-template-columns:76px 1fr; gap:14px; padding:17px 8px; border-bottom:1px solid var(--line); }
+    .row { display:grid; grid-template-columns:76px 1fr; gap:14px; padding:15px 8px; border-bottom:1px solid var(--line); }
     .row:last-child { border-bottom:0; }
-    .number { color:var(--accent); font-weight:700; font-size:18px; padding-top:2px; }
-    .content { min-width:0; }
-    .text { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
-    .author { margin-top:6px; color:var(--muted); font-size:16px; }
-    .status { display:inline-block; margin-left:8px; padding:1px 7px; border-radius:99px; background:#eef2ff; color:#4a58a8; font-size:14px; }
+    .row.current { background:#eef3ff; border-radius:12px; }
+    .number { color:var(--accent); font-weight:700; font-size:20px; }
+    .name { overflow-wrap:anywhere; word-break:break-word; font-weight:700; }
+    .meta { margin-top:4px; color:var(--muted); font-size:16px; }
+    .state { display:inline-block; margin-left:8px; padding:1px 7px; border-radius:99px; background:#eef2ff; color:#4a58a8; font-size:14px; }
+    .now { display:inline-block; margin-left:6px; padding:1px 7px; border-radius:99px; background:#3767d6; color:#fff; font-size:14px; }
     .empty { padding:32px 8px; color:var(--muted); text-align:center; }
     footer { padding:15px 28px 18px; border-top:1px solid var(--line); color:var(--muted); font-size:16px; }
   </style>
@@ -33,21 +34,21 @@
   <section class="card">
     <header>
       <div class="eyebrow">alicedev</div>
-      <h1>{{ title|default("需求列表") }}</h1>
+      <h1>{{ title }}</h1>
       {% if subtitle %}<div class="subhead">{{ subtitle }}</div>{% endif %}
     </header>
     <main>
       {% if rows %}
         {% for row in rows %}
-        <article class="row">
+        <article class="row{% if row.current %} current{% endif %}">
           <div class="number">{{ row.label }}</div>
-          <div class="content">
-            <div class="text">{{ row.text|default("") }}</div>
-            {% if row.author_name or row.created_at %}<div class="author">{{ row.author_name|default("匿名") }}{% if row.created_at %} · {{ row.created_at }}{% endif %}{% if row.status %}<span class="status">{{ row.status }}</span>{% endif %}</div>{% endif %}
+          <div>
+            <div class="name">{{ row.name }}{% if row.current %}<span class="now">当前</span>{% endif %}</div>
+            <div class="meta">{{ row.scenario }}<span class="state">{{ row.state }}</span>{% if row.last_activity_at %} · {{ row.last_activity_at }}{% endif %}</div>
           </div>
         </article>
         {% endfor %}
-      {% else %}<div class="empty">暂时没有需求记录</div>{% endif %}
+      {% else %}<div class="empty">还没有会话</div>{% endif %}
     </main>
     {% if footer %}<footer>{{ footer }}</footer>{% endif %}
   </section>

@@ -1,0 +1,46 @@
+# 让 AI 按 issue → PR 流程改进 bot 本身（场景 upgrade-bot，同一时间只处理一个，其余排队）。
+# 子指令 approve / reject 是人工审批：approve 即 merge 并部署。
+name: 升级bot
+type: ai
+aliases: [upgradebot]
+summary: 让 AI 按 issue → PR 流程改进 bot 本身，批准后自动上线
+usage: /升级bot <需求>
+examples:
+  - /升级bot 新增 /ping 指令，回复 pong
+permission: admin
+args:
+  需求: text
+do:
+  start:
+    scenario: upgrade-bot
+    text: "{{ 需求 }}"
+subcommands:
+  - name: approve
+    type: program
+    summary: 批准候选改动：merge 对应 PR 并部署上线
+    usage: /升级bot approve [%会话]
+    examples:
+      - /升级bot approve %3
+      - （引用审批消息）/升级bot approve
+    permission: admin
+    args:
+      会话: session
+    do:
+      human:
+        session: 会话
+        command: approve
+    say:
+      not_allowed: "%{{ session.no }} 现在不在等待批准的状态。"
+  - name: reject
+    type: program
+    summary: 拒绝候选改动（或放弃一个卡住的升级），结束该会话
+    usage: /升级bot reject [%会话]
+    examples:
+      - /升级bot reject %3
+    permission: admin
+    args:
+      会话: session
+    do:
+      human:
+        session: 会话
+        command: reject

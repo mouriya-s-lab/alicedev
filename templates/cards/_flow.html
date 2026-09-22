@@ -1,0 +1,22 @@
+{# Scenario flow partial: expects ``flow`` from render/views.py scenario_flow(). #}
+<section class="flow">
+  <h2>场景流程 · {{ flow.name }}</h2>
+  {% if flow.description %}<div class="flow-desc">{{ flow.description }}</div>{% endif %}
+  {% for state in flow.states %}
+  <div class="state{% if state.current %} current-state{% endif %}">
+    <div class="state-head">
+      <span class="state-name">{{ state.name }}</span>
+      <span class="state-kind">{{ state.kind }}</span>
+      {% if state.visible %}<span class="tag">群里可见</span>{% endif %}
+      {% if state.share %}<span class="tag">附链接</span>{% endif %}
+      {% if state.current %}<span class="tag now">当前</span>{% endif %}
+    </div>
+    {% if state.edges %}
+    <div class="edges">{% for edge in state.edges %}<span class="edge">{{ edge.label }} → {{ edge.to }}</span>{% endfor %}</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% if flow.builtin_terminals %}
+  <div class="builtins">任意状态还可能进入：{% for t in flow.builtin_terminals %}<span class="edge{% if t.current %} now{% endif %}">{{ t.label }}（{{ t.name }}）</span>{% endfor %}</div>
+  {% endif %}
+</section>

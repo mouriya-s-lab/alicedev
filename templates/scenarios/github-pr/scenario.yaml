@@ -1,0 +1,16 @@
+# 预取 GitHub Pull Request 后由 AI 解读。由 /解读 或路由 github_link 启动。单对话态。
+name: github-pr
+title: "PR #{{ github.number }} · {{ github.title }}"
+description: 读取 GitHub Pull Request，评估改动、风险与验证缺口
+provider: omp-alicedev/opencode-go/muse-spark-1.3-contributor
+cwd: /workspace/openalice
+initial: discussing
+states:
+  discussing:
+    kind: agent
+    prompt: discussing.md
+    reply:
+      kinds: [text, image_template]
+      image_templates: [generic_card]
+      stickers: []
+      max_text_chars: 600

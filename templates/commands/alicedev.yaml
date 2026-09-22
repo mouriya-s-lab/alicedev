@@ -1,0 +1,15 @@
+# 帮助：不带参数出帮助卡（全部指令分组 + 本群当前会话）；带指令名出该指令的详细卡。
+name: alicedev
+type: program
+aliases: [help, 帮助]
+summary: 查看帮助，或某条指令的详细说明
+usage: /alicedev [指令名]
+examples:
+  - /alicedev
+  - /alicedev 继续
+permission: all
+args:
+  指令名: word
+do:
+  help:
+    command: 指令名

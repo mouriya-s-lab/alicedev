@@ -1,0 +1,58 @@
+{#
+  说明图（/升级bot 审批用）：产品层面的变化，不出现代码。
+  fields（JSON）：
+    title       str   一句话标题
+    session     str   会话标记，如 "%3"
+    summary     str   变化概述（给群友看）
+    changes     [ {before: str, after: str} ]   变化前后对比（文字）
+    notes       [str] 注意事项（可空）
+    pr          str   PR 链接
+#}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; --wash:#f7f9fc; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:30px; background:var(--wash); color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:20px; line-height:1.5; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:26px 30px 22px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); font-size:18px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:32px; line-height:1.25; }
+    main { padding:20px 26px 24px; }
+    .summary { white-space:pre-wrap; }
+    .change { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:14px; }
+    .side { padding:12px 14px; border-radius:12px; border:1px solid var(--line); white-space:pre-wrap; font-size:18px; }
+    .side .k { display:block; font-size:15px; font-weight:700; color:var(--muted); margin-bottom:4px; }
+    .after { border-color:#9fb8f0; background:#f3f7ff; }
+    .notes { margin-top:16px; color:var(--muted); font-size:17px; }
+    footer { padding:14px 30px 18px; border-top:1px solid var(--line); color:var(--muted); font-size:16px; overflow-wrap:anywhere; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">alicedev · 升级说明 {{ session }}</div>
+      <h1>{{ title }}</h1>
+    </header>
+    <main>
+      <div class="summary">{{ summary }}</div>
+      {% for c in changes %}
+      <div class="change">
+        <div class="side"><span class="k">之前</span>{{ c.before }}</div>
+        <div class="side after"><span class="k">之后</span>{{ c.after }}</div>
+      </div>
+      {% endfor %}
+      {% if notes %}<div class="notes">{% for n in notes %}<div>· {{ n }}</div>{% endfor %}</div>{% endif %}
+    </main>
+    {% if pr %}<footer>{{ pr }}</footer>{% endif %}
+  </section>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# 分页查看本群收藏（卡片图）。
+name: 收藏夹
+type: program
+aliases: [favorites]
+summary: 查看本群收藏
+usage: /收藏夹 [页]
+examples:
+  - /收藏夹
+  - /收藏夹 2
+permission: all
+args:
+  页: page
+do:
+  list:
+    source: favorites
+    card: favorites_list
+    page: 页

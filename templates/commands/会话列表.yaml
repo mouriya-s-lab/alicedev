@@ -1,0 +1,34 @@
+# 列出本群的会话（卡片图）；子指令「全部」包含已结束的会话。
+name: 会话列表
+type: program
+aliases: [sessions]
+summary: 查看本群进行中的会话
+usage: /会话列表 [页]
+examples:
+  - /会话列表
+  - /会话列表 2
+permission: all
+args:
+  页: page
+do:
+  list:
+    source: sessions
+    card: session_list
+    page: 页
+subcommands:
+  - name: 全部
+    type: program
+    summary: 查看本群全部会话（含已结束的）
+    usage: /会话列表 全部 [页]
+    examples:
+      - /会话列表 全部
+      - /会话列表 全部 3
+    permission: all
+    args:
+      页: page
+    do:
+      list:
+        source: sessions
+        card: session_list
+        page: 页
+        archived: true

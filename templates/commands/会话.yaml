@@ -1,0 +1,15 @@
+# 查看一个会话的详情卡：名称、场景、当前状态（标在场景流程上）、创建人、最近活动。
+name: 会话
+type: program
+aliases: [session]
+summary: 查看会话详情（不写 %n 则看引用消息所属会话或当前会话）
+usage: /会话 [%会话]
+examples:
+  - /会话
+  - /会话 %2
+permission: all
+args:
+  会话: session
+do:
+  session_show:
+    session: 会话

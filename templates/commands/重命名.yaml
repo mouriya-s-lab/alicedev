@@ -1,0 +1,17 @@
+# 修改会话名称（会话创建者或管理员）。
+name: 重命名
+type: program
+aliases: [rename]
+summary: 修改会话名称
+usage: /重命名 [%会话] <名称>
+examples:
+  - /重命名 %2 收藏夹按作者筛选
+  - /重命名 新名称
+permission: owner
+args:
+  会话: session
+  名称: text
+do:
+  session_rename:
+    session: 会话
+    name: "{{ 名称 }}"

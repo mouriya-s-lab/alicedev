@@ -1,0 +1,54 @@
+# /升级bot：AI 按 issue → PR 流程迭代 bot 自身（ARCHITECTURE §13.2）。
+# 实现、测试、e2e 都在 working 里完成；唯一的分界是人工批准，批准即 merge。
+name: upgrade-bot
+title: "升级 · {{ text }}"
+description: 让 AI 按 issue → PR 流程改进 bot 本身，经人批准 merge 后自动上线
+provider: omp-alicedev/opencode-go/muse-spark-1.3-contributor
+repo:
+  fixed_main: /workspace/alicedev
+  base: main
+exclusive: true
+initial: working
+states:
+  working:
+    kind: agent
+    prompt: working.md
+    next: [awaiting_approval, needs_human]
+  awaiting_approval:
+    kind: human
+    data: [issue, pr, commit]
+    reply:
+      kinds: [image, text]
+    commands:
+      approve: deploying
+      reject: rejected
+  needs_human:
+    kind: human
+    data: [reason]
+    share: true
+    reply:
+      kinds: [text]
+    commands:
+      reject: rejected
+  deploying:
+    kind: agent
+    prompt: deploying.md
+    next: [working, active, rolled_back, deploy_failed]
+  active:
+    kind: terminal
+    data: [commit]
+    reply:
+      kinds: [text]
+  rolled_back:
+    kind: terminal
+    data: [commit, reason]
+    reply:
+      kinds: [text]
+  deploy_failed:
+    kind: terminal
+    data: [reason]
+    share: true
+    reply:
+      kinds: [text]
+  rejected:
+    kind: terminal

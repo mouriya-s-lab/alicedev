@@ -1,0 +1,15 @@
+# 把本群当前会话切换到指定会话；之后 @bot 的自然消息都会发到它。
+name: 切换
+type: program
+aliases: [switch]
+summary: 把本群当前会话切换到指定会话
+usage: /切换 %会话
+examples:
+  - /切换 %2
+  - /切换%2
+permission: all
+args:
+  会话: session
+do:
+  session_switch:
+    session: 会话

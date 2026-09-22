@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; --wash:#f7f9fc; --soft:#f8fbff; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:30px; background:var(--wash); color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:20px; line-height:1.48; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:26px 30px 22px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); font-size:18px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:34px; line-height:1.25; }
+    .subhead { margin-top:7px; color:var(--muted); font-size:18px; }
+    main { padding:20px 24px 24px; }
+    h2 { margin:18px 0 8px; font-size:22px; }
+    .block { padding:14px 18px; border:1px solid var(--line); border-radius:14px; background:var(--soft); margin-top:12px; }
+    .usage { color:var(--accent); font-weight:700; font-size:22px; overflow-wrap:anywhere; }
+    .meta { margin-top:4px; color:var(--muted); font-size:17px; }
+    .param { display:flex; gap:10px; padding:5px 0; font-size:18px; }
+    .param-name { font-weight:700; min-width:120px; }
+    .opt { color:var(--muted); font-size:15px; }
+    .example { font-family:"Menlo", "WenQuanYi Zen Hei", monospace; font-size:17px; padding:4px 0; color:#344054; }
+    .flow { margin-top:6px; }
+    .flow-desc { color:var(--muted); font-size:17px; margin-bottom:8px; }
+    .state { padding:9px 12px; border:1px solid var(--line); border-radius:12px; margin-top:8px; }
+    .current-state { border-color:#3767d6; background:#eef3ff; }
+    .state-head { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .state-name { font-weight:700; }
+    .state-kind { color:var(--muted); font-size:16px; }
+    .tag { padding:0 7px; border-radius:99px; background:#e9efff; color:#4a58a8; font-size:14px; }
+    .tag.now { background:#3767d6; color:#fff; }
+    .edges, .builtins { margin-top:5px; display:flex; flex-wrap:wrap; gap:6px; font-size:16px; color:#344054; }
+    .edge { padding:1px 8px; border-radius:8px; background:#f2f4f7; }
+    .edge.now { background:#3767d6; color:#fff; }
+    .builtins { margin-top:10px; color:var(--muted); }
+    footer { padding:16px 30px 20px; border-top:1px solid var(--line); color:var(--muted); font-size:17px; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">alicedev · {{ main.type }}</div>
+      <h1>{{ title }}</h1>
+      {% if subtitle %}<div class="subhead">{{ subtitle }}</div>{% endif %}
+    </header>
+    <main>
+      {% for cmd in [main] + subcommands %}
+      <div class="block">
+        <div class="usage">{{ cmd.usage }}</div>
+        <div class="meta">{{ cmd.summary }} · {{ cmd.type }} · 权限：{{ cmd.permission }}</div>
+        {% if cmd.params %}
+        <h2>参数</h2>
+        {% for p in cmd.params %}<div class="param"><span class="param-name">{{ p.name }}</span><span>{{ p.type }}{% if p.optional %} <span class="opt">可省略</span>{% endif %}</span></div>{% endfor %}
+        {% endif %}
+        {% if cmd.examples %}
+        <h2>示例</h2>
+        {% for e in cmd.examples %}<div class="example">{{ e }}</div>{% endfor %}
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% if flow %}{% include "_flow.html" %}{% endif %}
+    </main>
+    {% if aliases %}<footer>别名：{% for a in aliases %}/{{ a }}{% if not loop.last %}、{% endif %}{% endfor %}</footer>{% endif %}
+  </section>
+</body>
+</html>

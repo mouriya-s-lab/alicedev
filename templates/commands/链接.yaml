@@ -1,0 +1,17 @@
+# 为会话签发一次性 paseo 链接：每个被 @ 的人一条，不 @ 则发给自己。打开后只显示 agent 操作区。
+name: 链接
+type: program
+aliases: [link]
+summary: 签发一次性链接，进入会话的 AI 工作区
+usage: /链接 [%会话] [@用户…]
+examples:
+  - /链接
+  - /链接 %2 @小明 @小红
+permission: admin
+args:
+  会话: session
+  用户: mentions
+do:
+  share:
+    session: 会话
+    to: 用户

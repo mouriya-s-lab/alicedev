@@ -1,0 +1,15 @@
+# 结束一个会话（进入内建状态 archived）；会话创建者或管理员。
+name: 归档
+type: program
+aliases: [archive]
+summary: 结束并归档一个会话
+usage: /归档 [%会话]
+examples:
+  - /归档 %2
+  - /归档
+permission: owner
+args:
+  会话: session
+do:
+  session_archive:
+    session: 会话

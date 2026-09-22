@@ -1,0 +1,19 @@
+# 列出本群的需求（requirement 场景的会话，含已结束的）。
+name: 需求列表
+type: program
+aliases: [requirements]
+summary: 查看本群提过的需求
+usage: /需求列表 [页]
+examples:
+  - /需求列表
+  - /需求列表 2
+permission: all
+args:
+  页: page
+do:
+  list:
+    source: sessions
+    scenario: requirement
+    archived: true
+    card: requirements_list
+    page: 页

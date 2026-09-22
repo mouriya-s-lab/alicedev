@@ -1,0 +1,13 @@
+# 收藏一条被引用的消息（含图片）。
+name: 收藏
+type: program
+summary: 收藏引用的那条消息（可含图片）
+usage: /收藏 （引用消息）
+examples:
+  - （引用一条消息）/收藏
+permission: all
+args:
+  引用消息: quoted
+do:
+  favorite:
+    quoted: 引用消息
