@@ -296,9 +296,10 @@ def test_upgrade_bot_main_sync_failed_shares_link(tmp_path: Path) -> None:
         row = await env.sessions.by_no(CHAT, 1)
         assert row.state == "main_sync_failed"
         assert env.paseo.worktrees == [] and env.paseo.workspaces[0][1] == "/workspace/alicedev"
-        assert any("无法快进" in t and "https://dev.example/t/t1" in t for t in texts)
+        # The state notice (with its link) is the only reply; start adds no "failed" line.
+        assert len(texts) == 1
+        assert "无法快进" in texts[0] and "https://dev.example/t/t1" in texts[0]
         assert env.gateway.issued[0]["user_key"] == ADMIN
-        assert any("创建失败" in t for t in texts)
         # A failed exclusive session does not block the next one.
         env.paseo.git_overrides.pop(("status", "--porcelain=v1", "--untracked-files=all"))
         await env.dispatcher.handle(inbound("/升级bot y", user=ADMIN))

@@ -347,7 +347,7 @@ class Dispatcher:
                 input=prompt_input, platform_message_id=inbound.platform_message_id,
             )
         )
-        if result.outcome is StartOutcome.DUPLICATE:
+        if result.outcome in (StartOutcome.DUPLICATE, StartOutcome.NOTIFIED):
             return Outcome(_SILENT)
         if result.session is None:  # unknown scenario: nothing was created
             await self._system(inbound, "internal_error", reason=result.reason or None)

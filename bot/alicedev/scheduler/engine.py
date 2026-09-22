@@ -60,6 +60,7 @@ class StartOutcome(str, Enum):
     QUEUED = "queued"
     FAILED = "failed"
     DUPLICATE = "duplicate"  # platform redelivery: already handled, say nothing
+    NOTIFIED = "notified"  # ended in main_sync_failed: its state notice (with link) is the reply
 
 
 @dataclass(frozen=True)
@@ -205,6 +206,8 @@ class Scheduler:
         current = await self._sessions.get(row.session_id)
         if ok:
             return StartResult(StartOutcome.CREATED, current)
+        if current is not None and current.state == MAIN_SYNC_FAILED:
+            return StartResult(StartOutcome.NOTIFIED, current, reason)
         return StartResult(StartOutcome.FAILED, current, reason)
 
     async def _exclusive_busy(self, scenario: Scenario, exclude: int) -> bool:

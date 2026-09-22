@@ -351,7 +351,7 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重�
 
 ## 7. 调度：会话状态机
 
-- **新开会话**：AI 指令或路由的 `start` / `github` 动作 → 分配本群下一个会话号 `%n`，建会话（名称由场景 `title` 渲染）→ 设为本群当前会话 → 派发 → 按结果键回话（`created` / `queued` / `failed`）。入站以 `(chat_key, platform_message_id)` 去重，平台重投不重复建会话。
+- **新开会话**：AI 指令或路由的 `start` / `github` 动作 → 分配本群下一个会话号 `%n`，建会话（名称由场景 `title` 渲染）→ 设为本群当前会话 → 派发 → 按结果键回话（`created` / `queued` / `failed`）；派发落到 `main_sync_failed` 时它的状态消息（带链接）就是回话，不再按 `failed` 回。入站以 `(chat_key, platform_message_id)` 去重，平台重投不重复建会话。
 - **派发**：非独占场景立即派发；独占场景在同场景已有未结束会话时保持 `queued`，前一个结束后按创建顺序派发。`repo` 场景派发时先 `mainsync align --repo <fixed_main>`（在 paseo 容器内 `git fetch` + fast-forward），非 ff / 脏 / 冲突 → `workspace_register(<fixed_main>)`（已登记则复用），workspace_id 记入该会话 → `main_sync_failed`（按 `share: true` 附链接，人手动清理）；成功则 `worktree_create(<fixed_main>, <base>, s<session_id>)`，记录 `workspace_id`、worktree 路径、`base_sha`。然后进入 `initial`。
 - **进入 agent 状态**：在会话工作目录起 agent（`provider` 取场景，原样传给 `--provider`，如 `omp-alicedev/opencode-go/muse-spark-1.3-contributor`；`cwd` 场景用会话的 local workspace，`repo` 场景用会话 worktree，均带 `--workspace`），首轮 = `/chat_ingress` 包裹的状态 prompt；写 `agents(session_id, state)`。
 - **发到已有会话**（`send`）：目标会话 = 显式 `%n` > 被引用消息所属会话 > 本群当前会话。被引用消息所属会话按 `outbound` 查；AstrBot 主动发送拿不到平台消息 id 时，按被引用消息首行的会话标记 `%n` 解析 → 必须处于对话态 → 注入该状态的 agent（§4 注入）→ 设为本群当前会话；否则按结果键回话。
