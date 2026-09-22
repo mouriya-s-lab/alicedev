@@ -72,6 +72,7 @@ class Invocation:
     inbound: Inbound
     args: Mapping[str, Any]
     command: Command | None  # None for routes
+    path: tuple[str, ...] = ()  # command words as typed, e.g. ("会话列表", "全部")
     # Session args resolved by the action, exposed to ``say`` as ``session``-shaped dicts.
     resolved: dict[str, dict[str, Any] | None] = field(default_factory=dict)
 
@@ -142,7 +143,7 @@ class Dispatcher:
         if command.permission is Permission.ADMIN and not inbound.is_admin:
             _LOG.info("permission denied: %s /%s", inbound.user_key, command.name)
             return True
-        inv = Invocation(inbound=inbound, args=parsed.values, command=command)
+        inv = Invocation(inbound=inbound, args=parsed.values, command=command, path=matched.path)
         await self._run(inv, command.do, command.say, permission=command.permission)
         return True
 
@@ -420,7 +421,7 @@ class Dispatcher:
         chat = inv.inbound.chat_key
         page_value = inv.args.get(action.page) if action.page else None
         page = int(page_value) if isinstance(page_value, int) else 1
-        command = inv.command.name if inv.command else ""
+        command = " ".join(inv.path)  # the page hint repeats the full command, subcommand included
         match action.source:
             case ListSource.SESSIONS:
                 rows, total = await self._sessions.page(

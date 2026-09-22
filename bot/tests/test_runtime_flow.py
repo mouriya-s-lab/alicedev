@@ -168,6 +168,9 @@ def test_program_commands(tmp_path: Path) -> None:
         all_rows = env.cards.rendered[1][1]
         assert json.dumps(active_rows, ensure_ascii=False, default=str).count("%") < \
             json.dumps(all_rows, ensure_ascii=False, default=str).count("%")
+        # The page hint repeats the full command, subcommand included.
+        assert active_rows["footer"].endswith("/会话列表 n")
+        assert all_rows["footer"].endswith("/会话列表 全部 n")
         await env.close()
 
     run(main())

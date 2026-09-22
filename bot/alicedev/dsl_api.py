@@ -18,6 +18,7 @@ from alicedev.dsl.model import Action, AgentState, Command, Registry, Scenario, 
 @dataclass(frozen=True)
 class Matched:
     command: Command
+    path: tuple[str, ...]  # command words, e.g. ("会话列表", "全部")
     session_no: int | None
     rest: str
     raw: Any  # the DSL slice's Invocation, passed back to parse_args
@@ -56,6 +57,7 @@ def match(registry: Registry, text: str) -> Matched | None:
         return None
     return Matched(
         command=inv.command,
+        path=inv.path,
         session_no=getattr(inv, "session_no", None),
         rest=str(getattr(inv, "rest", "") or ""),
         raw=inv,
