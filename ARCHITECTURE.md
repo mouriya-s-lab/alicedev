@@ -1,49 +1,69 @@
-# alicedev 架构与契约（v2）
+# alicedev 架构与契约（v3）
 
-> 权威设计文档。所有切片按本文件的契约实现；契约变更必须先改本文件。事实依据见 `docs/research/*.md`。v2 吸收了两轮评审（`history://ReviewSteady`、`history://ReviewDivergent`）的结论；被否决的 v1 方案不再保留。
+> 权威设计文档。所有切片按本文件的契约实现；**契约变更必须先改本文件，再写代码**。事实依据见 `docs/research/*.md`。v3 = v2（已部署的普通会话链路）+ §15 `/升级bot` 闭环（用户已定稿、尚未落地）。v2 中被 v3 推翻的表述已直接替换，不保留对照。
 
 ## 0. 一句话
 
-AstrBot 插件把群聊指令变成 paseo 会话，paseo 里的 omp 通过 `alicedev-reply` 把回复送回群；网关用一次性 token 把 paseo 的工作区面板分享出去，并公开渲染调查报告。
+AstrBot 插件把群聊指令变成 paseo 会话，paseo 里的 harness 通过 `alicedev-reply` 把回复送回群；网关用一次性 token 把 paseo 的工作区面板分享出去，并公开渲染调查报告。`/升级bot` 让 bot 侧的调度程序驱动 paseo 里的 AI 迭代 bot 自身，产出图片证据，经人批准后以 git + 重启 astrbot 自动上线。
+
+**四条不变量（违背即错）**
+1. **monorepo**：alicedev 的全部代码（bot、调度、shim、e2e 基建、部署）只在本仓库。paseo fork 仅承载 embed 模式与 Arch 镜像（§9），不放任何 alicedev 业务逻辑。
+2. **paseo daemon 是不可修改的已部署基础设施**：被动响应 API（起会话 / 等完成 / 查状态 / 建或归档 worktree），从不主动发意图、从不推进流程。daemon 用 RPC 与各 harness（omp / pi / claude / codex…）通信并自行整理会话产出与状态；bot **只读 daemon 整理好的结果**，绝不直接驱动 harness、绝不要求模型按 schema 吐 JSON。
+3. **bot 侧三个独立职责，互不混淆**：**传输**（平台适配器与 QQ/TG 收发文字、图片、链接）、**调度**（驱动 daemon 一步步推进多会话流程的程序，在 bot 侧）、**可见性**（调度内部状态不暴露给 QQ，只有边界事件进入聊天面）。
+4. **IaC 只声明与 provision 宿主文件，与运行时彻底解耦**：`nekoringo-iac/apps/alicedev`（OpenTofu）只把声明的宿主文件从一个 committed alicedev revision 落到 `/srv/alicedev`；`tofu apply` 成功 = 文件落地，**绝不**跑 `docker compose`、判容器健康、验 QQ 在线、记 ownership —— 服务不健康不靠重跑 apply 修。运行时 bring-up（`compose up` / `deployctl` 的 checkout+restart）与健康 / QQ / e2e 监控是**另一层 owner**；`bot/` 由 `deployctl` 拥有、不进 IaC 托管集。详见 §12。
 
 ## 1. 进程与容器（nekoringo2，docker compose，网络 `alicedev`）
 
 ```mermaid
 flowchart LR
-  QQ[个人 QQ 账号] -->|NTQQ 客户端| nap
+  QQ[个人 QQ 账号] --> qqproto
   TG[Telegram / WebChat] -->|平台适配器| astr
-  subgraph host[nekoringo2]
+  subgraph host[nekoringo2 · compose 项目 deploy]
     caddy[caddy · TLS :443] --> gw[gateway · aiohttp :8080]
     gw -->|cookie 校验后反代 http+ws| paseo
     gw -->|GET /v1/status| astr
-    nap[NapCat · QQNT/Xvfb<br/>CPU-only · WebUI :6099 loopback]
-    nap -->|OneBot v11 reverse WS<br/>ws://astrbot:6199/ws| astr
-    astr[astrbot + alicedev 插件<br/>DuckDB 唯一写者 · API :6200 · aiocqhttp :6199]
-    astr -->|HTTP /mcp/agents 或 WS /ws| paseo[paseo daemon :6767<br/>Arch 镜像 · omp · alicedev 扩展 · alicedev-reply]
-    paseo -->|alicedev-reply → POST /v1/reply| astr
+    qqproto[snowluma · QQ 协议端<br/>OneBot v11 反向 WS → astrbot:6199<br/>持久设备身份，重启不掉线]
+    qqproto -->|OneBot v11 reverse WS| astr
+    astr[astrbot + alicedev 插件<br/>传输 · 调度 · 可见性<br/>DuckDB 唯一写者 · API :6200]
+    astr -->|daemon API：起会话 / 等完成 / 查状态 / worktree| paseo[paseo daemon :6767<br/>不可修改的已部署服务<br/>RPC 驱动各 harness]
+    paseo -->|会话内 shim → POST /v1/reply, /v1/upgrade/callback| astr
+    paseo -.->|pi-unified-exec: docker exec / ssh| e2e
+    paseo -.->|pi-unified-exec: docker exec| tgcli
+    e2e[e2e · 专用镜像<br/>跑 candidate bot 做测试<br/>独立常驻 · 无 pi daemon]
+    tgcli[tg-cli · 持久 Telegram 会话<br/>独立常驻]
     astr -->|html_render| t2i[t2i :8999]
     astr -->|POST /internal/tokens| gw
   end
 ```
 
+常驻容器 8 个：`caddy`、`gateway`、`astrbot`、`snowluma`（替换 NapCat）、`paseo`、`t2i`、`e2e`、`tg-cli`；一次性 init 2 个：`astrbot-init`、`reports-init`。`e2e` 与 `tg-cli` **永不随任何其他服务下线**。
+
 | 进程 | 语言 | 职责 |
 |---|---|---|
-| `astrbot` + 插件 `bot/` | Python 3.11 | 指令、模板、需求/收藏、会话状态机、12h 空闲关闭、渲染、内部 API、GitHub 预取、报告发布 |
-| `napcat` | QQNT / Xvfb | 个人 QQ 的生产协议端和 OneBot v11 reverse-WS 客户端；CPU-only，QQ/config/plugins 均在命名卷中，6099 只绑定宿主机 loopback |
+| `astrbot` + 插件 `bot/` | Python 3.11 | **传输**：指令、模板、需求/收藏、会话状态机、12h 空闲关闭、渲染、内部 API、GitHub 预取、报告发布。**调度**：`/升级bot` 调度程序（§15）。**可见性**：只把边界事件送进聊天 |
+| `snowluma` | — | 个人 QQ 的生产协议端与 OneBot v11 reverse-WS 客户端，替换 NapCat（§12）。登录态与设备身份在命名卷 |
 | `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入）、报告 md 渲染、状态页 |
-| `paseo`（fork `paseo-alicedev`） | TS | agent 运行时；fork 只做 embed 模式 + Arch 镜像 |
-| `harness/omp-extension` | TS | `/chat_ingress` 命令、`chat_reply` 工具、`session_stop` 提醒 |
+| `paseo`（fork `paseo-alicedev`） | TS | **不可修改的已部署服务**。agent 运行时，RPC 驱动 harness；fork 只做 embed 模式 + Arch 镜像，**不含任何 alicedev 业务逻辑** |
+| `harness/omp-extension` | TS | 普通会话链路：`/chat_ingress` 命令、`chat_reply` 工具、`session_stop` 提醒 |
 | `harness/reply-cli` | TS（node 单文件，零依赖） | `alicedev-reply`：POST `/v1/reply`，带重试 |
+| `e2e` | 专用镜像（astrbot + t2i + webchat） | `/升级bot` 测试场：以线上版本与 candidate 分别跑同一冻结场景；无生产凭据；内部不跑 pi |
+| `tg-cli` | kabi-tg-cli + Telethon | `/升级bot` 真实消息面：持久 Telegram 会话，发消息 / 取消息 / 下载图片 |
 | `t2i`、`caddy` | 官方镜像 | HTML→PNG；ACME TLS |
 
 **单写者**：只有 AstrBot 插件进程打开 `alicedev.duckdb`；所有存储变更经 `Store` 的单个 `asyncio.Lock`。其他进程通过 bot 内部 HTTP API。**没有** paseo 侧 sidecar，没有 TS bridge 服务。
 
-**内部 API 传输**：docker 网络 HTTP + 头 `X-Alicedev-Token`，不映射主机端口（HANDOFF §9 的 unix socket 默认据此更新）。
+**内部 API 传输**：docker 网络 HTTP + 头 `X-Alicedev-Token`，不映射主机端口。
 
-**QQ 生产链路**：NapCat 是本项目必需的个人 QQ 协议端，加入 `internal`（反向 WS）和
-`edge`（QQ 登录/消息出站）网络；AstrBot 在容器内监听 `0.0.0.0:6199`，宿主机不发布
-6199。NapCat 的 WebUI 只通过 `127.0.0.1:6099` 和 SSH tunnel 管理。QQ 登录密码只在
-隧道后的 WebUI 输入，不进入 Compose、`.env` 或仓库；设备身份和 WebUI 配置由命名卷持久化。
+**QQ 生产链路**：QQ 协议端加入 `internal`（反向 WS）和 `edge`（QQ 登录/消息出站）网络；AstrBot 在容器内监听 `0.0.0.0:6199`，宿主机不发布 6199。协议端管理面板只绑定宿主机 netbird 接口（`PANEL_BIND_IP`），mesh 内直连，公网不可达。QQ 登录密码只在面板输入，不进入 Compose、`.env` 或仓库；设备身份由命名卷持久化。
+
+**AI 工作目录与 project（paseo 容器 `/workspace` 卷）**
+
+| project | 工作目录 | 用途 |
+|---|---|---|
+| 现有：OpenAlice | `/workspace/openalice` | 普通会话（`/需求`、`/帮我调查`、`/解读`…）给用户干活 |
+| 新增：迭代 bot | fixed-main `/workspace/alicedev`（**只做 main 对 remote 的 fetch+ff 对齐，永不开 AI、永不写**）+ 每条 `/升级bot` 一个从它派生的 git worktree | `/升级bot` 的全部 AI 会话（实现 / 测试 / e2e，各自 tab）只在该需求的 worktree 里工作 |
+
+现状：`/workspace/alicedev` 为空目录，迭代 bot project 与 fixed-main **尚未建立**，是 §15 的第一个前置条件。
 
 ## 2. 标识符
 
@@ -199,7 +219,7 @@ bot 持久化解析后的实际值到 `sessions(provider, model, thinking)`。
 
 1. **embed 模式**（`packages/app/src/fork-features/embed/`）：`?embed=1` → 不渲染 `LeftSidebar`/`SidebarChrome`，隐藏主面板内的导航逃逸（清单 `docs/research/paseo-app-embed.md` §4）；`embed` 在 agent→workspace 重定向中保留；首次加载 host 注册竞态（`host-runtime.ts:1531-1568`）修复为等待 bootstrap 完成再解析 `/h/<serverId>` 路由。公开 URL 只用已知 workspace 形式。
 2. **Arch 镜像**（`docker/arch/Dockerfile`）：保持契约（uid/gid 1000、`/home/paseo`、`/workspace`、`PASEO_LISTEN=0.0.0.0:6767`、`/api/health`、tini+gosu 等价）；Arch builder/runtime 同一 Node 大版本；安装 `omp`（bun）、`git`、`gh`；`/opt/alicedev/{omp-extension,reply-cli}` 由 build arg 指定的 alicedev 构建产物 COPY。daemon 配置模板启用 `omp` 并声明 `omp-alicedev`。
-3. `close_agent_request`：仅当 §4 spike 判定 MCP 路径不可用时实现。
+3. **范围封顶**：fork 只有以上两项。`/升级bot` 的调度、skill、schema、worktree 封装等一切 alicedev 业务逻辑**不进 fork**（不变量 §0.1）。`feat/upgrade-bot-conductor` 分支上的 `tools/conductor*`、`.agents/skills/upgrade-bot-*`、`fork-features/upgrade-bot.md` 是放错位置的产物，按 HANDOFF 清理。
 4. 每项独立 issue + PR；trunk 接线记入 `fork-features/trunk-patches.md`。
 
 ## 10. 契约 H：指令与权限
@@ -236,36 +256,138 @@ tokens_issued(token_id PK, session_ref, user_key, issued_by, target, issued_at, 
 
 ## 12. 部署（`deploy/`）
 
-- `docker-compose.yml`：caddy、gateway、astrbot、**napcat**、t2i、paseo；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`NAPCAT_ONEBOT_TOKEN`、`GITHUB_TOKEN?`。
-- 卷：`astrbot_data`；`napcat_qq`、`napcat_config`、`napcat_plugins`（NapCat 运行身份、配置和插件）；`paseo_home`（含 omp 配置，用户自管）；`workspace`；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `/srv/alicedev/reports/_published` ro）。
-- NapCat 镜像固定为 `mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee`（`linux/amd64`、CPU-only）；只绑定宿主机 `127.0.0.1:6099`，不发布 `6199`。
+- `docker-compose.yml`：caddy、gateway、astrbot、**snowluma**（QQ 协议端；已替换 NapCat）、t2i、paseo、**e2e**、**tg-cli**；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`ONEBOT_ACCESS_TOKEN`（aiocqhttp 反向 WS 与 snowluma 共用）、`PANEL_BIND_IP`（管理面板绑定的 netbird 接口 IP）、`VNC_PASSWD?`、`GITHUB_TOKEN?`。
+- 卷：`astrbot_data`；QQ 协议端的登录态 / 配置命名卷；`paseo_home`（daemon 与 harness 配置，用户自管）；`workspace`（`/workspace/openalice` + 迭代 bot project）；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `/srv/alicedev/reports/_published` ro）；`tg-cli` 的 Telegram 会话命名卷。
+- QQ 协议端：**snowluma**（`motricseven7/snowluma`；命名卷 `qq-gateway-data`/`qq-client-config`/`qq-client-data` 持久设备身份，重启不掉线）。反向 WS 由 `deploy/astrbot/snowluma_onebot.json` seed 为 `wsClients.url=ws://astrbot:6199`（token `ONEBOT_ACCESS_TOKEN`）。NapCat 及其服务、卷、`NAPCAT_*` 变量**已移除**。协议端面板（noVNC `6081` / WebUI `5099`）只绑 `${PANEL_BIND_IP}`，OneBot 端口不发布宿主机。首次 QQ 登录是运行时人工步骤（noVNC 扫码），gate 不了 IaC 或 e2e。
 - paseo 镜像在 nekoringo2 由 compose `build` 从 `paseo-alicedev` 检出构建；harness 产物由 alicedev 仓库 `make harness` 生成后作为 build context 传入。
-- AstrBot 插件 bind mount `./bot` → `/AstrBot/data/plugins/alicedev`；`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`、`${NAPCAT_ONEBOT_TOKEN}`）+ `t2i_endpoint=http://t2i:8999`。
+- AstrBot 插件 bind mount `./bot` → `/AstrBot/data/plugins/alicedev`；`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`）+ `t2i_endpoint=http://t2i:8999`。
+- **bot 代码交付**：`/srv/alicedev/bot` 必须是 git 检出（当前是 rsync 落地，需转换）；`/升级bot` 部署 = `git checkout <批准的 commit>` + `docker compose … restart astrbot`，只碰 astrbot，paseo 不动。新增依赖由 AstrBot 插件加载时按 `requirements.txt` pip 安装，不重建镜像。
+- `e2e`（`deploy/e2e/`）：专用镜像，每次运行**现挂**指定 SHA 的 bot 源（不烤进镜像）；独立 project 名、网络、卷，端口只绑 loopback 随机；无 QQ/TG/真 paseo 凭据。`tg-cli`（`deploy/tg-cli/`）：独立 compose、`restart: always`，Telegram 会话在命名卷；首次登录一次性人工完成。两者永不随 `deploy` 项目下线。
 - DNS：`alicedev.237575.xyz` A 已手工建（HANDOFF §7）；runbook 记录迁入 `pve-vctcn/apps/dns` 的后续 issue。
-- QQ 生产 onboarding 采用操作员选定的 NapCat WebUI 密码登录；密码、新设备验证和后续重连按 `docs/runbook.md` §7 执行，当前文档不声称登录已完成。
+- **宿主文件 provision 由 IaC 拥有，与运行时解耦（§0 不变量 4）**：`nekoringo-iac/apps/alicedev`（OpenTofu，state 本地，`github.com/mouriya-s-lab/nekoringo-iac`）把声明的宿主文件——`deploy/`（compose、Caddyfile、astrbot 模板 + 渲染产物）、`templates/`、由 SOPS 流式注入的 `deploy/.env`——从一个 committed alicedev revision `git archive` 原子安装到 `/srv/alicedev`（明文不进 state/argv/log）。`tofu apply` 成功 = 文件落地；**绝不** `docker compose`、判健康、验 QQ、记 ownership。**`bot/` 不在 IaC 托管集**（由上条 `deployctl` 的 `/升级bot` 部署拥有——否则 apply 会回滚已批准的部署）。运行时 bring-up（`make up` / `make build && make up` / `deployctl`）是分离的 owner。模块用法见 `nekoringo-iac/apps/alicedev/README.md`。
 
 ## 13. 仓库布局
 
 ```
-bot/                      AstrBot 插件
+bot/                      AstrBot 插件（传输 · 调度 · 可见性 全在这里）
   metadata.yaml main.py _conf_schema.json requirements.txt
-  alicedev/commands/      CommandRegistry, handlers
+  alicedev/commands/      CommandRegistry, handlers（含 upgrade.py = /升级bot 入口）
   alicedev/templates/     frontmatter loader, Jinja, reply_spec
-  alicedev/store/         duckdb, schema.sql, repositories
-  alicedev/paseo/         PaseoControl(接口) + mcp.py / ws.py, session_actor.py, sweeper.py
-  alicedev/render/        cards (html_render), pagination
-  alicedev/api/           aiohttp 内部 API
+  alicedev/store/         duckdb, schema.sql, repositories（含 upgrade_runs_repo.py）
+  alicedev/paseo/         PaseoControl(接口) + 传输实现, session_actor.py, sweeper.py
+  alicedev/upgrade/       /升级bot 调度程序：状态机、daemon 驱动、收敛判定、边界事件（§15；待从 paseo fork 迁回）
+  alicedev/render/        cards (html_render), pagination, cli.py（证据图 CLI）
+  alicedev/api/           aiohttp 内部 API（/v1/reply, /v1/upgrade/*）
   alicedev/github/        链接解析与预取
   alicedev/reports.py     发布
-templates/prompts/ templates/cards/ templates/stickers/
+tools/                    shim 与运维 CLI：botctl tgctl deployctl deployrun mainsync e2e_driver.py bootstrap-fixed-main.sh
+skills/upgrade-bot-*/     /升级bot 各角色（实现 / 测试 / e2e）的 skill（待从 paseo fork 迁回；挂载给 paseo 会话）
+templates/prompts/ templates/cards/（含 upgrade_*.html）templates/stickers/
 harness/core/ harness/omp-extension/ harness/reply-cli/
 gateway/
-deploy/
-docs/research/ docs/runbook.md
+deploy/                   docker-compose.yml, dev/, e2e/, tg-cli/, astrbot/, paseo/
+docs/research/ docs/runbook.md docs/evidence/
 ```
+
+**monorepo**：以上即 alicedev 的全部；`paseo-alicedev` 只保留 §9 的 embed + Arch 镜像。
 
 ## 14. 交付顺序
 
-1. **Spike（真实边界，产出即正式代码）**：本机 OrbStack 跑 AstrBot(webchat)+t2i；本机原生跑 paseo daemon（`paseo-alicedev` 检出，启用 omp + `omp-alicedev`）；实现 `bot/alicedev/paseo/*`、`harness/*`、`bot/alicedev/api`、最小 `/需求` + `messages/reply_deliveries`。证明：WebChat `/需求` → create（无 initialPrompt）→ ingress send → 扩展命令收到、模型看不到 msg → `chat_reply` → `/v1/reply` → WebChat 出现回复；`session_stop` 提醒在未回复时触发一次；关闭 + 再注入自动恢复。回写 §4/§7。
-2. **并行切片（契约已定）**：gateway；embed 模式；Arch 镜像；store + 需求/收藏/列表卡片 + 分页；模板 loader + GitHub 预取 + `/解读`；`/链接`；`/收藏`；runbook + compose。
-3. **集成**：nekoringo2 部署，TLS，WebChat 端到端，`/链接` 分享页浏览器验证（冷加载/刷新），报告渲染验证（mermaid、高亮、CJK）。
+1. **Spike（已完成）**：普通会话链路契约 §3–§8 已在 nekoringo2 上线并验证（HANDOFF §10）。
+2. **本轮**：QQ 协议端**已替换为 snowluma**（napcat 移除）；`apps/alicedev` IaC **已重设计为 provision-only 并 apply**（§0 不变量 4、§12）。**待办**：`/升级bot` 闭环按 §15 落地（建迭代 bot project / fixed-main，调度迁回 bot 侧并改 daemon API 驱动，e2e/tg-cli 上生产，bot 目录转 git，真 e2e 验收后上线）。
+
+## 15. 契约 I：`/升级bot` 闭环（用户定稿，未落地）
+
+### 15.1 角色
+
+| 角色 | 在哪 | 做什么 | 不做什么 |
+|---|---|---|---|
+| **消息层（传输）** | bot | 收 `/升级bot <需求>`、`/升级bot approve\|reject`；往 QQ/TG 发说明图、证据图、链接、文字 | 不知道流程 |
+| **调度程序** | bot（`bot/alicedev/upgrade/`，astrbot 进程内后台任务） | **唯一驱动者**。调 daemon API 起会话 → 等完成 → 读 daemon 整理好的状态 + 读 worktree git 拿 commit / 文件 → 判断 → 起下一会话；持有会话间流转状态 | 不驱动 harness、不解析模型自由文本、不要求 schema 输出 |
+| **paseo daemon** | `paseo` 容器 | 被动：起会话 / 等完成 / 查状态 / 建、归档 worktree；RPC 驱动 harness 并整理产出 | 不发意图、不推进流程、不被修改 |
+| **AI 会话** | daemon 里、该需求的 worktree 内（实现 / 测试 / e2e 各一 tab） | 用 CLI + skill + pi-unified-exec 干活；跨容器经 shim | 不用 MCP（pi 默认无 MCP）；不起下一步 |
+| **e2e 容器** | 独立常驻 | 跑线上版本与 candidate 的同一冻结场景 | 不跑 pi、不是第二个 daemon |
+| **tg-cli 容器** | 独立常驻 | 真实 Telegram 收发与取图 | — |
+
+### 15.2 流程（调度程序推进，每步等 daemon 结果）
+
+```mermaid
+sequenceDiagram
+  participant Q as QQ/TG
+  participant M as bot 消息层
+  participant C as bot 调度程序
+  participant D as paseo daemon
+  participant A as AI 会话(worktree)
+  participant E as e2e / tg-cli
+  Q->>M: /升级bot 需求
+  M->>C: start{run_id, prompt, chat_key, user_key}
+  C->>C: mainsync align（fixed-main fetch+ff）
+  alt 对齐失败（main 被污染）
+    C-->>M: main_sync_failed{reason, paseo_link→fixed-main}
+    M-->>Q: 异常说明 + 链接（人工介入）
+  end
+  C->>D: 建 worktree（从对齐后的 main 派生）
+  C->>D: 起实现会话
+  A->>A: 改 bot 代码, commit
+  D-->>C: 完成/状态
+  C->>C: 读 worktree commit
+  C->>D: 起测试会话
+  D-->>C: 完成/状态
+  loop e2e 修复轮（收敛判定）
+    C->>D: 起 e2e 会话
+    A->>E: docker exec 进 e2e/tg-cli：线上版 before, candidate after
+    D-->>C: 完成/状态 + 证据
+    C->>C: 5 轮不收敛 → e2e_not_converging{link}
+  end
+  C->>C: 渲染说明图 + before/after 证据图（t2i）
+  C-->>M: candidate_ready{explain_img, evidence_img, commit}
+  M-->>Q: 图 + 图 + 批准入口
+  Q->>M: approve
+  M->>C: approve{run_id, commit}
+  C->>C: git checkout commit → restart astrbot → 核实 → 失败则回滚
+  C-->>M: deploy_result{active|rolled_back|rollback_failed}
+  M-->>Q: 结果
+```
+
+### 15.3 硬规则
+
+- **fixed-main**（`/workspace/alicedev`）：只做 `git fetch` + fast-forward；永不开 AI、永不写；正常态永远干净。非 ff / 脏 / 冲突 → `main_sync_failed`，当场回 QQ 并附指向该工作区的 paseo 一次性链接，人手动清理。冲突不是常态，是"某个跑飞的 AI 改了 main"的绊线。
+- **一次 `/升级bot` = 一个 worktree = 一组会话**：bot 只持有 worktree/workspace 句柄作为这组会话的身份；组内各会话 id 与流转状态在调度程序手里，不进聊天面、不写 `sessions` 表。普通对话映射（1 chat ↔ 1 current session）不变；升级是平行映射（1 run ↔ 1 workspace ↔ N session）。
+- **同一 worktree 串行**：实现会话写 + commit；测试 / e2e 只读消费该 commit；写操作放各自临时目录或 e2e 容器内。
+- **收敛判定**：每轮产出失败项集合 F、错误签名集合 E、距离 d。收敛 = F、E 各自子集单调缩小且 d 不增、至少一处严格下降；green = F=E=∅ 且 d=0。**收敛就继续跑，不因"没完成"求助**；**连续 5 轮不收敛**（平台 / 震荡 / 回归）才 `e2e_not_converging` 交人。不加硬上限。
+- **before/after 对称**：同一冻结场景，在同一 e2e 容器分别跑线上 SHA 与 candidate SHA，走真实用户面（tg-cli 真投递 / webchat 经 agent-browser），标注 run_id、两个 SHA、场景、时间。不拿生产当 before。渲染前清 t2i / 渲染缓存，否则视觉 diff 会被缓存掩盖。
+- **说明图**：产品级变化，不出现代码。**证据图**：before/after + 测试结果。二者经 t2i 渲成 PNG，以 AstrBot **Image**（非 File）内联发送（`/v1/reply` 的 file→File 路径不适用）。
+- **批准绑定确切 commit**：main 前进则旧候选作废、重测重批。
+- **部署**：`git checkout <commit>` 到 `/srv/alicedev/bot` + `restart astrbot` + 核实容器内 SHA + 无害健康命令；核实不过 → 自动回滚到上一 commit（正常终态 `rolled_back`）；只有回滚也失败才升级人工（带链接）。paseo 全程不动。契约变更（MCP/回调 API/报告路径/链接格式/共享 token）不属 bot-only 部署，标记"需协同"。
+- **模型**：paseo daemon 的 provider 配置（部署配置文件，不在 bot 代码里写死）；`/升级bot` 会话用 task:low 同款模型 `muse-spark-1.3-contributor`（opencode 侧 id 为 `muse-spark-1.3-contributor-free`；omp 的 `:xhigh` 是思考档位不是模型名），调度程序起会话时只传 provider id。
+- **无 MCP**：paseo 里的会话动作全部 CLI + skill；跨容器调用（会话 → bot、→ tg-cli、→ e2e）走 shim（`tools/botctl`、`tools/tgctl`、pi-unified-exec）。
+
+### 15.4 边界事件（调度程序 → 消息层，仅此四类；其余全部内部）
+
+| 事件 | 载荷 | 聊天面表现 |
+|---|---|---|
+| `candidate_ready` | `explain_img, evidence_img, commit` | 说明图 + 证据图 + 批准入口；行转 `awaiting_approval` |
+| `main_sync_failed` | `reason, paseo_link`（指向 fixed-main） | 文字 + 链接，人工介入 |
+| `e2e_not_converging` | `round_summaries, paseo_link` | 文字 + 链接，人工介入 |
+| `deploy_result` | `outcome: active \| rolled_back \| rollback_failed, paseo_link?` | 文字；仅 `rollback_failed` 带链接 |
+
+消息层 → 调度程序：`start{prompt, chat_key, user_key}`、`approve{run_id, commit}`、`reject{run_id}`。
+
+### 15.5 存储（新表，不碰 `sessions` / `chat_current_sessions`）
+
+```sql
+upgrade_runs(run_id PK, chat_key, user_key, workspace_ref, status, candidate_commit, evidence_refs JSON, created_at, updated_at)
+-- status: accepted | candidate_ready | awaiting_approval | deploying | active | rolled_back | failed | main_sync_failed
+```
+
+### 15.6 shim（`tools/`，全 CLI）
+
+| shim | 方向 | 作用 |
+|---|---|---|
+| `botctl callback <event.json>` / `state --chat` | 会话 → bot | 包 bot 内部 API（`POST /v1/upgrade/callback`、`GET /v1/upgrade/state`） |
+| `tgctl send\|recent\|photo` | 会话 → tg-cli 容器 | `docker exec alicedev-tg-cli tg …`；`photo --out` 写在容器内路径，取回走共享卷或 `docker cp` |
+| `deployctl apply --commit --target` / `rollback --to` | 调度程序 → 宿主 | checkout + restart astrbot + 核实；参数化 target |
+| `deployrun` | 调度程序 | apply → 核实 → 失败回滚 → 恰一次 `deploy_result` |
+| `mainsync align --repo` | 调度程序 | fetch + ff；非 ff/脏 → 非零退出 `main_sync_failed` |
+| `e2e_driver.py` | e2e 会话 | baseline vs candidate 同场景，出 before/after PNG + `{F,E,d}` |
+| worktree 建/归档 | 调度程序 → daemon | **走 daemon API**，不再经 paseo fork 里的 `worktreectl` |

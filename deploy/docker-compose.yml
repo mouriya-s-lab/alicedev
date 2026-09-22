@@ -35,7 +35,7 @@ services:
     environment:
       # The rendered cmd_config carries this token; require it before any
       # `up` so a missing token cannot silently disable reverse WS auth.
-      NAPCAT_ONEBOT_TOKEN: ${NAPCAT_ONEBOT_TOKEN:?set NAPCAT_ONEBOT_TOKEN}
+      ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?set ONEBOT_ACCESS_TOKEN}
     command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/cmd_config.json /data/cmd_config.json && cp /seed/alicedev_config.json /data/config/alicedev_config.json"]
     volumes:
       - astrbot_data:/data
@@ -138,34 +138,75 @@ services:
       retries: 10
       start_period: 45s
 
-  napcat:
-    # v4.18.28 amd64 manifest; keep the tag and digest together.
-    image: mlikiowa/napcat-docker:v4.18.28@sha256:41b1a8e10953065f4796ab19c0c8760cd3175376be976c5480710d29a77357ee
+  # Seed SnowLuma's OneBot reverse-WS client config into its data volume before
+  # it starts. onebot.json is global adapter config (NOT login state); it is
+  # re-applied every `up` and lives safely beside the persisted device identity
+  # in the same volume. chown to the in-container snowluma uid so SnowLuma can
+  # normalize/rewrite it on load.
+  snowluma-init:
+    image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
     platform: linux/amd64
-    container_name: alicedev-napcat
-    # Pin a stable, ordinary-looking device name so QQ does not see a new
-    # device on every container recreate (default hostname = container id).
-    hostname: DESKTOP-Q7M3K8P
-    restart: unless-stopped
-    # CPU-only: the image uses its virtual display and has no GPU devices.
+    container_name: alicedev-snowluma-init
+    restart: "no"
     environment:
-      NAPCAT_UID: ${NAPCAT_UID:-1000}
-      NAPCAT_GID: ${NAPCAT_GID:-1000}
-      MODE: astrbot
-      TZ: Asia/Shanghai
-    ports:
-      # Bind the WebUI to PANEL_BIND_IP (netbird wt0 on the host) so mesh peers
-      # reach it directly; falls back to loopback when unset.
-      - "${PANEL_BIND_IP:-127.0.0.1}:6099:6099"
+      # The rendered onebot.json carries this token; require it before any `up`
+      # so a missing token cannot silently drop reverse-WS auth.
+      ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?set ONEBOT_ACCESS_TOKEN}
+      SNOWLUMA_UID: ${SNOWLUMA_UID:-1000}
+      SNOWLUMA_GID: ${SNOWLUMA_GID:-1000}
+    command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/onebot.json /data/config/onebot.json && chown -R \"$${SNOWLUMA_UID}:$${SNOWLUMA_GID}\" /data/config"]
     volumes:
-      - napcat_qq:/app/.config/QQ
-      - napcat_config:/app/napcat/config
-      - napcat_plugins:/app/napcat/plugins
-    # Internal carries reverse WS; edge is only for QQ's outbound access.
+      - qq-gateway-data:/data
+      - ./astrbot/snowluma_onebot.rendered.json:/seed/onebot.json:ro
+
+  snowluma:
+    # NTQQ -> OneBot v11 bridge; replaces NapCat. Persists device identity in
+    # named volumes so restarts do NOT drop the QQ session (NapCat's failure).
+    # Digest resolved 2026-09-22 (linux/amd64); keep tag+digest together.
+    image: motricseven7/snowluma:latest@sha256:28efabd86a432b7b12ccb87bed098705cf05c22cea50dcbf1930bdf288c9d0f0
+    platform: linux/amd64
+    container_name: alicedev-snowluma
+    restart: unless-stopped
+    # QQ's bundled Chromium needs a large /dev/shm; the native hook injects into
+    # the QQ process via ptrace, which the default seccomp profile blocks.
+    shm_size: 1gb
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 1048576
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      TZ: Asia/Shanghai
+      SNOWLUMA_UID: ${SNOWLUMA_UID:-1000}
+      SNOWLUMA_GID: ${SNOWLUMA_GID:-1000}
+      SNOWLUMA_WEBUI_HOST: 0.0.0.0
+      SNOWLUMA_WEBUI_PORT: 5099
+      SNOWLUMA_HOOK_AUTOLOAD: "1"
+      SNOWLUMA_QQ_FLAGS: "--disable-gpu --disable-software-rasterizer --disable-gpu-compositing"
+      # Empty -> a random remote-desktop password is generated and printed once
+      # in the logs on first start (kept on the data volume).
+      VNC_PASSWD: ${VNC_PASSWD:-}
+    ports:
+      # noVNC login desktop (6081) + SnowLuma WebUI (5099) bind to PANEL_BIND_IP
+      # (netbird wt0 on the host) so mesh peers reach them directly; never
+      # public. Falls back to loopback when unset. OneBot 3000/3001 are NOT
+      # published: SnowLuma connects OUT to astrbot's reverse-WS server.
+      - "${PANEL_BIND_IP:-127.0.0.1}:6081:6081"
+      - "${PANEL_BIND_IP:-127.0.0.1}:5099:5099"
+    volumes:
+      - qq-gateway-data:/app/data
+      - qq-client-config:/app/.config
+      - qq-client-data:/app/.local/share
+    # internal carries the reverse WS to astrbot; edge is QQ's outbound to Tencent.
     networks: [internal, edge]
     depends_on:
       astrbot:
         condition: service_healthy
+      snowluma-init:
+        condition: service_completed_successfully
 
   t2i:
     image: soulter/astrbot-t2i-service:latest@sha256:f7243fd37cc247f13da2b23eb394e77cae18ee7b104440ee776d55419e89f61e
@@ -224,12 +265,12 @@ networks:
 volumes:
   astrbot_data:
     name: alicedev_astrbot_data
-  napcat_qq:
-    name: alicedev_napcat_qq
-  napcat_config:
-    name: alicedev_napcat_config
-  napcat_plugins:
-    name: alicedev_napcat_plugins
+  qq-gateway-data:
+    name: alicedev_qq_gateway_data
+  qq-client-config:
+    name: alicedev_qq_client_config
+  qq-client-data:
+    name: alicedev_qq_client_data
   paseo_home:
     name: alicedev_paseo_home
   workspace:

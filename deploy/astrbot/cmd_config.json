@@ -21,12 +21,12 @@
       "enable": true
     },
     {
-      "id": "qq_napcat",
+      "id": "qq",
       "type": "aiocqhttp",
       "enable": true,
       "ws_reverse_host": "0.0.0.0",
       "ws_reverse_port": 6199,
-      "ws_reverse_token": "${NAPCAT_ONEBOT_TOKEN}"
+      "ws_reverse_token": "${ONEBOT_ACCESS_TOKEN}"
     }
   ],
   "t2i_strategy": "remote",

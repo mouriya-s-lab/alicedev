@@ -23,6 +23,7 @@ test-env:
 test-rendered:
 	test -s deploy/astrbot/cmd_config.rendered.json
 	test -s deploy/astrbot/alicedev_config.rendered.json
+	test -s deploy/astrbot/snowluma_onebot.rendered.json
 
 build: harness render-config
 	$(COMPOSE) --profile build build paseo-base
