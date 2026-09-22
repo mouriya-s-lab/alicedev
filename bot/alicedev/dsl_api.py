@@ -1,4 +1,4 @@
-"""The runtime's only door into the DSL slice (docs/slices-phase-a.md).
+"""The runtime's only door into the DSL package (``alicedev.dsl``, ``alicedev.render.views``).
 
 Every call into ``alicedev.dsl.*`` and ``alicedev.render.views`` goes through
 here so the runtime depends on one small surface. Result shapes of the DSL

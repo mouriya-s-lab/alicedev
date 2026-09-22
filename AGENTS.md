@@ -48,17 +48,8 @@
 ## 5. 工具与仓库习惯
 
 - 文件读写用 `read` / `edit` / `write` / `grep` / `glob`，不用 shell 的 cat/sed/grep/find 替代；shell 只跑真实二进制（docker、ssh、git、tofu）。
-- 服务器：`ssh -i ~/.ssh/dev-dai -o IdentitiesOnly=yes root@160.191.41.242`（nekoringo2）；compose 统一 `cd /srv/alicedev && docker compose -f deploy/docker-compose.yml --env-file deploy/.env …`。rsync 推送必须 `--exclude 'src/' 'backups/' 'deploy/.env' 'deploy/astrbot/*.rendered.json'`。
+- 服务器：`ssh -i ~/.ssh/dev-dai -o IdentitiesOnly=yes root@160.191.41.242`（nekoringo2）；compose 统一 `docker compose -f /srv/alicedev/deploy/docker-compose.yml --env-file /srv/alicedev/deploy/.env …`。宿主文件的归属与上线方式见 `docs/runbook.md`：`deploy/` 由 IaC 落地，`bot/` 与 `templates/` 只经 `deployctl` / `deployrun` 切检出交付，不手工拷贝。
 - DuckDB 单写者是 astrbot 进程；不要从别的进程打开 `alicedev.duckdb`。
 - 凭据从 IaC/SOPS/`deploy/.env` 取，不粘进对话、不进 argv、不进 state。
 - git：日常用 RiriAgent 账号；功能走 feature 分支，真 e2e 验收后再合 main；不拿 `git status/diff` 当验证。
 - 图一律 mermaid。中文与用户沟通，术语保留英文。
-
-## 6. 本轮当前工作（详见 HANDOFF.md §6）
-
-1. **bot → daemon 控制面返工**：`bot/alicedev/paseo/mcp.py`（MCP，生产在用）与 `daemon_ws.py`（WS，未提交）都违背 §2.2，替换为 `tools/paseoctl` shim + CLI JSON 解析。
-2. **出站改为消息队列**：`/v1/reply` 只入队（202），outbox worker 出队发送（ARCHITECTURE §6）。
-3. **调度改为会话状态机，旧会话业务并入**：`bot/alicedev/upgrade/` 改造为 `bot/alicedev/scheduler/`，状态由回复 `transition` 推进；`templates/prompts/*` 迁为 `templates/scenarios/` 下的单对话态场景，`session_actor` 的建会话/当前指针/注入改由调度承担，现 `sessions` 表拆为会话（`sessions`，本群自增 `%n`）与 `agents`，`requirements` 表并入会话；补齐会话列表/详情/切换/重命名/归档指令；`/升级bot` 落为 `templates/scenarios/upgrade-bot/`（ARCHITECTURE §3/§7/§13）。
-4. 建 alicedev fixed-main → e2e / tg-cli 上生产 → 宿主 bot 转 git 检出 → 真 e2e 验收 → 合 main。
-5. **指令 DSL 化**：把 `commands/` 下写死的指令改为 `templates/commands/*.yaml` + `routes.yaml` + `messages.yaml`，代码收敛为 `alicedev/dsl/`（加载、校验、check/card CLI）与 `alicedev/actions/`（封闭动作集合）；帮助卡、指令卡、会话卡从 DSL 生成；`templates/` 改由 `deployctl` 检出交付，nekoringo-iac `apps/alicedev` 的托管集去掉 `templates/`（ARCHITECTURE §0.4/§3/§11）。
-6. **去掉 paseo fork**：paseo 镜像改为上游原样 + `deploy/paseo/Dockerfile` 运行层；分享视图（只留 agent 操作区）改由网关注入样式实现（ARCHITECTURE §8），`/链接` 目标去掉 `embed=1`；`paseo-alicedev` 里 upgrade-bot 相关内容按 HANDOFF §5 摘走后不再使用该仓库；清理本机临时 daemon / lab / 容器（HANDOFF §4）。
