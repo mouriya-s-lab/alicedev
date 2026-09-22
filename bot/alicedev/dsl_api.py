@@ -12,26 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping, Union
 
 from alicedev.domain import SessionView
-from alicedev.dsl.model import (
-    Action,
-    AgentState,
-    Command,
-    FavoriteAction,
-    GithubAction,
-    HelpAction,
-    HumanAction,
-    ListAction,
-    Registry,
-    Scenario,
-    SendAction,
-    SessionArchiveAction,
-    SessionRenameAction,
-    SessionShowAction,
-    SessionSwitchAction,
-    ShareAction,
-    StartAction,
-    Tmpl,
-)
+from alicedev.dsl.model import Action, AgentState, Command, Registry, Scenario, Tmpl
 
 
 @dataclass(frozen=True)
@@ -82,16 +63,12 @@ def match(registry: Registry, text: str) -> Matched | None:
 
 
 def parse_args(matched: Matched) -> ArgsResult:
-    from alicedev.dsl.invocation import parse_args as _parse
+    from alicedev.dsl.invocation import ArgError, parse_args as _parse
 
     result = _parse(matched.command, matched.raw)
-    message = getattr(result, "message", None)
-    if isinstance(message, str) and not hasattr(result, "values"):
-        return ArgsError(message)
-    values = getattr(result, "values", result)
-    if not isinstance(values, Mapping):
-        return ArgsError(str(result))
-    return ArgsOk(dict(values))
+    if isinstance(result, ArgError):
+        return ArgsError(result.message)
+    return ArgsOk(dict(result.values))
 
 
 def reply_instructions(scenario: Scenario, state: AgentState) -> str:
@@ -100,40 +77,28 @@ def reply_instructions(scenario: Scenario, state: AgentState) -> str:
     return _ri(scenario, state)
 
 
-_ACTION_NAMES: Mapping[type, str] = {
-    StartAction: "start",
-    GithubAction: "github",
-    SendAction: "send",
-    SessionShowAction: "session_show",
-    SessionSwitchAction: "session_switch",
-    SessionRenameAction: "session_rename",
-    SessionArchiveAction: "session_archive",
-    HumanAction: "human",
-    ShareAction: "share",
-    FavoriteAction: "favorite",
-    ListAction: "list",
-    HelpAction: "help",
-}
-
-
 def message_key(action: Action, result: str) -> str:
     """``messages.yaml`` key for an action result, e.g. ``start.created``."""
-    return f"{_ACTION_NAMES[type(action)]}.{result}"
+    from alicedev.dsl.messages import message_key as _key
+
+    return _key(type(action), result)
 
 
 # --- card views (render/views.py, DSL slice) ---------------------------------
 
 
-def help_card(registry: Registry, current: SessionView | None) -> tuple[str, dict[str, Any]]:
+def help_card(
+    registry: Registry, current: SessionView | None, scenario: Scenario | None
+) -> tuple[str, dict[str, Any]]:
     from alicedev.render import views
 
-    return views.help_card(registry, current)
+    return views.help_card(registry, current, scenario)
 
 
-def command_card(command: Command, scenario: Scenario | None) -> tuple[str, dict[str, Any]]:
+def command_card(registry: Registry, command: Command) -> tuple[str, dict[str, Any]]:
     from alicedev.render import views
 
-    return views.command_card(command, scenario)
+    return views.command_card(command, views.command_scenario(registry, command))
 
 
 def session_card(view: SessionView, scenario: Scenario | None) -> tuple[str, dict[str, Any]]:
@@ -142,15 +107,25 @@ def session_card(view: SessionView, scenario: Scenario | None) -> tuple[str, dic
     return views.session_card(view, scenario)
 
 
-def list_card(
-    card: str, rows: list[Any], page: int, pages: int, *, archived: bool
+def session_list_card(
+    card: str,
+    rows: list[SessionView],
+    page: int,
+    pages: int,
+    *,
+    archived: bool,
+    command: str,
+    scenarios: Mapping[str, Scenario],
 ) -> tuple[str, dict[str, Any]]:
     from alicedev.render import views
 
-    match card:
-        case "favorites_list":
-            return views.favorites_list_card(rows, page, pages)
-        case "requirements_list":
-            return views.requirements_list_card(rows, page, pages)
-        case _:
-            return views.session_list_card(rows, page, pages, archived)
+    builder = views.SESSION_LIST_CARDS.get(card, views.SESSION_LIST_CARDS["session_list"])
+    return builder(rows, page, pages, archived=archived, command=command, scenarios=scenarios)
+
+
+def favorites_list_card(
+    rows: list[Any], page: int, pages: int, *, command: str
+) -> tuple[str, dict[str, Any]]:
+    from alicedev.render import views
+
+    return views.favorites_list_card(rows, page, pages, command=command)

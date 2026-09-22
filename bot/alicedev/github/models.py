@@ -10,8 +10,7 @@ from urllib.parse import quote
 class GithubKind(str, Enum):
     """The two GitHub resources understood by alicedev.
 
-    Values intentionally match ``TemplateRegistry`` link trigger keys so a
-    parsed URL can be routed without a second string mapping.
+    ``resource_name`` is the key of the ``github`` action's ``scenarios`` map.
     """
 
     ISSUE = "github_issue"
@@ -54,12 +53,6 @@ class GithubRef:
     def url(self) -> str:
         segment = self.kind.path_segment if self.kind is not None else "issues"
         return f"https://github.com/{self.owner}/{self.repo}/{segment}/{self.number}"
-
-    @property
-    def link_kind(self) -> str | None:
-        """TemplateRegistry trigger key for a URL with a known resource kind."""
-
-        return self.kind.value if self.kind is not None else None
 
     @property
     def api_path(self) -> str:

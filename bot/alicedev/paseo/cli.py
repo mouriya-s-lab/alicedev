@@ -109,7 +109,9 @@ class CliPaseoControl(PaseoControl):
         return AgentHandle(agent_id=ids[0], workspace_id=None, server_id=await self.server_id())
 
     async def send(self, agent_id: str, text: str) -> None:
-        argv = [self._docker, "exec", self._container, self._paseo, "send", agent_id, text]
+        # --no-wait: send returns once queued; the default blocks until the turn ends.
+        argv = [self._docker, "exec", self._container, self._paseo, "send", "--no-wait",
+                agent_id, "--prompt", text]
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo send exited {rc}: {(err or out).strip()[:500]}")
@@ -122,13 +124,17 @@ class CliPaseoControl(PaseoControl):
             raise PaseoError(str(exc)) from exc
 
     async def close(self, agent_id: str) -> None:
+        # paseo 0.8.0 has no "release runtime" verb; stop interrupts a running turn and
+        # is a no-op for idle agents, which is the only case the sweeper closes.
         argv = [self._docker, "exec", self._container, self._paseo, "stop", agent_id]
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo stop exited {rc}: {(err or out).strip()[:500]}")
 
     async def archive(self, agent_id: str) -> None:
-        argv = [self._docker, "exec", self._container, self._paseo, "archive", agent_id]
+        # --force: ending a session archives its agents even mid-turn.
+        argv = [self._docker, "exec", self._container, self._paseo, "archive", "--force",
+                agent_id]
         rc, out, err = await self._runner(argv, self._timeout)
         if rc != 0:
             raise PaseoError(f"paseo archive exited {rc}: {(err or out).strip()[:500]}")

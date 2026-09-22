@@ -2,45 +2,33 @@
   "allowed_chats": {
     "type": "list",
     "description": "允许使用的会话白名单（chat_key / unified_msg_origin）。留空表示全部允许。",
-    "items": {"type": "string"},
+    "items": {
+      "type": "string"
+    },
     "default": []
   },
   "admin_users": {
     "type": "list",
     "description": "管理员 user_key 列表（<platform_id>:<sender_id>）。",
-    "items": {"type": "string"},
+    "items": {
+      "type": "string"
+    },
     "default": []
   },
-  "paseo_url": {
+  "paseo_container": {
     "type": "string",
-    "description": "paseo daemon 基址（docker 网络内），如 http://paseo:6767",
-    "default": "http://paseo:6767"
+    "description": "paseo 容器名；bot 通过 docker exec <容器> paseo … --json 控制 agent 与 workspace。",
+    "default": "alicedev-paseo"
   },
-  "paseo_password": {
+  "paseo_bin": {
     "type": "string",
-    "description": "PASEO_PASSWORD（MCP/WS 鉴权）。",
-    "secret": true,
-    "default": ""
+    "description": "paseo 容器内的 paseo CLI 路径。",
+    "default": "paseo"
   },
-  "paseo_provider": {
+  "docker_bin": {
     "type": "string",
-    "description": "paseo provider id（custom provider）。",
-    "default": "omp-alicedev"
-  },
-  "paseo_model": {
-    "type": "string",
-    "description": "模型 id（留空则用 omp 默认）。",
-    "default": ""
-  },
-  "paseo_thinking": {
-    "type": "string",
-    "description": "thinkingOptionId（off|minimal|low|medium|high|xhigh|max）。",
-    "default": "high"
-  },
-  "paseo_cwd": {
-    "type": "string",
-    "description": "paseo 会话工作目录。",
-    "default": "/workspace/alicedev"
+    "description": "bot 容器内的 docker CLI 路径。",
+    "default": "docker"
   },
   "internal_token": {
     "type": "string",
@@ -75,8 +63,8 @@
   },
   "templates_root": {
     "type": "string",
-    "description": "模板根目录（含 prompts/cards/stickers）。留空则用插件内置 templates/。",
-    "default": ""
+    "description": "DSL 模板根目录（commands/scenarios/cards/stickers/messages.yaml/routes.yaml）。",
+    "default": "/AstrBot/alicedev-templates"
   },
   "stickers_root": {
     "type": "string",
@@ -101,7 +89,7 @@
   },
   "idle_close_seconds": {
     "type": "int",
-    "description": "会话空闲关闭阈值（秒）。默认 12 小时。",
+    "description": "对话型 agent 空闲关闭阈值（秒）。默认 12 小时。",
     "default": 43200
   },
   "sweeper_interval_seconds": {

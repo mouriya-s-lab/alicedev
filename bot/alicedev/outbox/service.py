@@ -89,11 +89,13 @@ class Outbox:
         msgs: Sequence[str],
         payload: Mapping[str, Any],
         payload_sha256: str,
+        deliver: bool = True,
     ) -> None:
         """Insert an agent reply row; caller holds ``store.lock`` (§6 transaction)."""
         await self._repo.insert(
             reply_id=reply_id, chat_key=chat_key, session_id=session_id, agent_ref=agent_ref,
             msgs=msgs, payload=payload, payload_sha256=payload_sha256,
+            state=OutboxState.QUEUED if deliver else OutboxState.SENT,
         )
 
     def wake(self) -> None:
@@ -158,7 +160,9 @@ class Outbox:
         return sent
 
     async def _fail_forever(self, reply_id: str, error: str) -> None:
-        await self._store.execute(
-            "UPDATE outbox SET state = ?, next_attempt_at = NULL, last_error = ? WHERE reply_id = ?",
-            (OutboxState.FAILED.value, error[:2000], reply_id),
-        )
+        async with self._store.lock:
+            await self._store.execute(
+                "UPDATE outbox SET state = ?, next_attempt_at = NULL, last_error = ? "
+                "WHERE reply_id = ?",
+                (OutboxState.FAILED.value, error[:2000], reply_id),
+            )

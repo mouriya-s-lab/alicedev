@@ -99,16 +99,22 @@ class OutboxRepo:
         msgs: Sequence[str],
         payload: Mapping[str, Any],
         payload_sha256: str,
+        state: OutboxState = OutboxState.QUEUED,
     ) -> None:
-        """Insert a queued row (caller holds store.lock for idempotency checks)."""
+        """Insert a row (caller holds store.lock for idempotency checks).
+
+        ``state=SENT`` records a reply that has nothing to deliver (a bare
+        transition) so its ``reply_id`` still replays idempotently.
+        """
         seq = await self._store.next_id("seq_outbox")
         await self._store.execute(
             "INSERT INTO outbox (reply_id, seq, chat_key, session_id, agent_ref, msgs, payload, "
             "payload_sha256, state, attempts, next_attempt_at) "
-            "VALUES (?,?,?,?,?,?,?,?, 'queued', 0, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')",
+            "VALUES (?,?,?,?,?,?,?,?,?, 0, CURRENT_TIMESTAMP AT TIME ZONE 'UTC')",
             (
                 reply_id, seq, chat_key, session_id, agent_ref, json.dumps(list(msgs)),
                 json.dumps(dict(payload), ensure_ascii=False, default=str), payload_sha256,
+                state.value,
             ),
         )
 

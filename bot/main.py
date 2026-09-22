@@ -1,19 +1,18 @@
 """alicedev AstrBot plugin entry point.
 
-AstrBot imports this module as ``data.plugins.alicedev.main``. We insert the
-plugin directory into ``sys.path`` so the bundled ``alicedev`` package is
-importable with absolute ``alicedev.*`` imports (the convention every slice
-uses). ``initialize()`` wires config -> Store -> TemplateRegistry -> Services ->
-CommandRegistry, then starts the internal API and idle sweeper.
+AstrBot imports this module as ``data.plugins.alicedev.main``. The plugin
+directory is put on ``sys.path`` so the bundled ``alicedev`` package imports
+absolutely. ``initialize()`` wires config → store → DSL registry → paseo CLI
+control → outbox → scheduler → reply intake → internal API, then starts the
+outbox worker, idle sweeper and restart recovery.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sys
-import uuid
+from pathlib import Path
 
 _PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 if _PLUGIN_DIR not in sys.path:
@@ -23,275 +22,142 @@ from astrbot.api.event import AstrMessageEvent, filter  # noqa: E402
 from astrbot.api.star import Context, Star, register  # noqa: E402
 from astrbot.core.message.message_event_result import MessageChain  # noqa: E402
 
-from alicedev.api.reply import ReplyRenderer  # noqa: E402
+from alicedev import dsl_api  # noqa: E402
+from alicedev.actions.executor import Dispatcher  # noqa: E402
+from alicedev.api.intake import ReplyIntake  # noqa: E402
 from alicedev.api.server import InternalApi  # noqa: E402
-from alicedev.commands import (  # noqa: E402
-    archive,
-    continuation,
-    favorites,
-    help,
-    interpret,
-    links,
-    lists,
-    requirement,
-    upgrade,
-)
-from alicedev.commands.context import Services  # noqa: E402
-from alicedev.commands.dispatch import CommandDispatcher  # noqa: E402
-from alicedev.commands.registry import CommandRegistry  # noqa: E402
 from alicedev.config import PluginConfig  # noqa: E402
-from alicedev.paseo.daemon_ws import WSDaemonControl  # noqa: E402
-from alicedev.paseo.mcp import MCPPaseoControl  # noqa: E402
-from alicedev.paseo.session_actor import SessionActor  # noqa: E402
+from alicedev.dsl.model import Registry  # noqa: E402
+from alicedev.gateway_client import GatewayClient  # noqa: E402
+from alicedev.github.client import GithubClient  # noqa: E402
+from alicedev.outbox.render import OutboxRenderer  # noqa: E402
+from alicedev.outbox.service import Outbox  # noqa: E402
+from alicedev.paseo.agent_actor import AgentActor  # noqa: E402
+from alicedev.paseo.cli import CliPaseoControl  # noqa: E402
 from alicedev.paseo.sweeper import IdleSweeper  # noqa: E402
+from alicedev.render.cards import CardRenderer  # noqa: E402
 from alicedev.reports import ReportPublisher  # noqa: E402
+from alicedev.scheduler.engine import Scheduler  # noqa: E402
+from alicedev.store.agents_repo import AgentsRepo  # noqa: E402
 from alicedev.store.db import Store  # noqa: E402
+from alicedev.store.favorites_repo import FavoritesRepo  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
-from alicedev.store.upgrade_runs_repo import UpgradeRunsRepo  # noqa: E402
-from alicedev.templates.registry import TemplateRegistry  # noqa: E402
-from alicedev.upgrade import (  # noqa: E402
-    CandidateReadyPayload,
-    DeployResultPayload,
-    E2ENotConvergingPayload,
-    MainSyncFailedPayload,
-    UpgradeConductor as UpgradeDriver,
-)
 
 _LOG = logging.getLogger("alicedev")
 
-def _optional_card_renderer(star: "AliceDevPlugin", templates_root: Path):
-    """Return a CardRenderer if CardsFavorites has landed it, else None."""
-    try:
-        from alicedev.render.cards import CardRenderer  # type: ignore
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        return CardRenderer(star, templates_root)  # signature owned by CardsFavorites
-    except Exception:  # noqa: BLE001
-        _LOG.warning("CardRenderer present but could not be constructed", exc_info=True)
-        return None
-
-def _optional_gateway_client(config: PluginConfig):
-    try:
-        from alicedev.gateway_client import GatewayClient  # type: ignore
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        return GatewayClient(config.gateway_url, config.internal_token)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def _optional_github_client(config: PluginConfig):
-    try:
-        from alicedev.github.client import GithubClient  # type: ignore
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        return GithubClient(config.github_token, config.default_repo)
-    except Exception:  # noqa: BLE001
-        return None
-
 
 class _ContextSender:
-    """PlatformSender that proactively sends a chain to a chat_key."""
+    """Outbox ``PlatformSender`` over AstrBot's proactive send.
+
+    AstrBot's ``send_message`` returns no platform message ids, so none are
+    recorded; quote resolution relies on the ``%n`` marker line instead.
+    """
 
     def __init__(self, context: Context) -> None:
         self._context = context
 
     async def send(self, chat_key: str, components: list) -> list[str]:
-        chain = MessageChain(chain=list(components))
-        ok = await self._context.send_message(chat_key, chain)
+        ok = await self._context.send_message(chat_key, MessageChain(chain=list(components)))
         if not ok:
             raise RuntimeError(f"no platform for session {chat_key}")
-        # AstrBot's proactive send returns no platform message id; synthesize one
-        # so at-most-once bookkeeping and outbound tracking have a stable handle.
-        return [f"alicedev-{uuid.uuid4().hex}"]
+        return []
 
 
-class _UpgradeEventSink:
-    """Deliver the conductor's four typed boundary events to the chat layer."""
-
-    def __init__(
-        self,
-        *,
-        sender: _ContextSender,
-        runs: UpgradeRunsRepo,
-        renderer: ReplyRenderer,
-    ) -> None:
-        self._sender = sender
-        self._runs = runs
-        self._renderer = renderer
-
-    async def _chat(self, run_id: str) -> str:
-        record = await self._runs.get(run_id)
-        if record is None:
-            raise RuntimeError(f"upgrade run disappeared before event delivery: {run_id}")
-        return record.chat_key
-
-    async def candidate_ready(self, run_id: str, payload: CandidateReadyPayload) -> None:
-        from astrbot.api.message_components import Plain
-
-        components: list = [
-            Plain(
-                f"候选已就绪：{run_id}\n"
-                f"candidate commit：{payload.commit}\n"
-                f"批准：/升级bot approve {run_id} {payload.commit}\n"
-                f"拒绝：/升级bot reject {run_id}"
-            )
-        ]
-        for image in (payload.explain_img, payload.evidence_img):
-            if image:
-                components.append(self._renderer.render_inline_image(image))
-        await self._sender.send(await self._chat(run_id), components)
-
-    async def main_sync_failed(self, run_id: str, payload: MainSyncFailedPayload) -> None:
-        from astrbot.api.message_components import Plain
-
-        text = f"升级运行 {run_id}：fixed-main 对齐失败。\n{payload.reason}"
-        if payload.paseo_link:
-            text += f"\nPaseo：{payload.paseo_link}"
-        await self._sender.send(await self._chat(run_id), [Plain(text)])
-
-    async def e2e_not_converging(self, run_id: str, payload: E2ENotConvergingPayload) -> None:
-        from astrbot.api.message_components import Plain
-
-        summary = json.dumps(
-            [round_summary.as_dict() for round_summary in payload.round_summaries],
-            ensure_ascii=False,
-        )
-        text = f"升级运行 {run_id}：E2E 连续 5 轮未收敛。\n{summary}"
-        if payload.paseo_link:
-            text += f"\nPaseo：{payload.paseo_link}"
-        await self._sender.send(await self._chat(run_id), [Plain(text)])
-
-    async def deploy_result(self, run_id: str, payload: DeployResultPayload) -> None:
-        from astrbot.api.message_components import Plain
-
-        labels = {
-            "active": "已上线并核实运行",
-            "rolled_back": "核实失败，已自动回滚",
-            "rollback_failed": "核实失败且自动回滚失败，需要人工介入",
-        }
-        text = f"升级运行 {run_id}：{labels.get(payload.outcome, payload.outcome)}。"
-        if payload.paseo_link:
-            text += f"\nPaseo：{payload.paseo_link}"
-        await self._sender.send(await self._chat(run_id), [Plain(text)])
+def _next_generation(data_dir: Path) -> int:
+    """Monotonic plugin load counter, surfaced by ``/v1/health`` for reload checks."""
+    path = data_dir / "generation"
+    try:
+        current = int(path.read_text(encoding="utf-8").strip() or 0)
+    except (OSError, ValueError):
+        current = 0
+    generation = current + 1
+    path.write_text(str(generation), encoding="utf-8")
+    return generation
 
 
-@register("alicedev", "mouriya-s-lab", "QQ 群 <-> paseo 开发环境桥接", "0.1.0")
+@register("alicedev", "mouriya-s-lab", "QQ 群 <-> paseo 开发环境桥接", "0.2.0")
 class AliceDevPlugin(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
         self._raw_config = config or {}
-        self._config: PluginConfig | None = None
         self._store: Store | None = None
-        self._paseo: MCPPaseoControl | None = None
-        self._upgrade_daemon: WSDaemonControl | None = None
-        self._sessions_actor: SessionActor | None = None
+        self._registry: Registry | None = None
+        self._outbox: Outbox | None = None
+        self._scheduler: Scheduler | None = None
         self._sweeper: IdleSweeper | None = None
         self._api: InternalApi | None = None
-        self._dispatcher: CommandDispatcher | None = None
-        self._services: Services | None = None
+        self._dispatcher: Dispatcher | None = None
+
+    def _current_registry(self) -> Registry:
+        assert self._registry is not None
+        return self._registry
 
     async def initialize(self) -> None:
         from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
         data_dir = Path(get_astrbot_plugin_data_path()) / "alicedev"
         data_dir.mkdir(parents=True, exist_ok=True)
-        config = PluginConfig.from_astrbot(self._raw_config, data_dir=data_dir)
-        self._config = config
+        config = PluginConfig.from_astrbot(
+            self._raw_config, data_dir=data_dir, plugin_dir=Path(_PLUGIN_DIR)
+        )
+
+        registry = dsl_api.load(config.templates_root)
+        self._registry = registry
+        for error in registry.errors:
+            _LOG.error("DSL %s:%s %s", error.path, error.line, error.message)
 
         store = Store(str(config.duckdb_path))
         await store.open()
         self._store = store
+        sessions = SessionsRepo(store)
+        agents = AgentsRepo(store)
+        messages = MessagesRepo(store)
+        favorites = FavoritesRepo(store)
 
-        sessions_repo = SessionsRepo(store)
-        messages_repo = MessagesRepo(store)
-
-        templates = TemplateRegistry()
-        templates.load(config.templates_root / "prompts")
-
-        paseo = MCPPaseoControl(config.paseo_url, config.paseo_password)
-        self._paseo = paseo
-
-        actor = SessionActor(
-            store=store, sessions=sessions_repo, messages=messages_repo,
-            templates=templates, paseo=paseo, config=config,
+        paseo = CliPaseoControl(
+            container=config.paseo_container, paseo_bin=config.paseo_bin,
+            docker_bin=config.docker_bin,
         )
-        self._sessions_actor = actor
-
-        render = _optional_card_renderer(self, config.templates_root)
-        gateway = _optional_gateway_client(config)
-        github = _optional_github_client(config)
-        reports = ReportPublisher(store=store, config=config)
-        renderer = ReplyRenderer(
-            config=config, templates=templates, render=render, reports=reports
+        actor = AgentActor(store=store, agents=agents, messages=messages, paseo=paseo, config=config)
+        renderer = OutboxRenderer(config=config, cards=CardRenderer(self, config.templates_root))
+        outbox = Outbox(store=store, renderer=renderer, sender=_ContextSender(self.context))
+        self._outbox = outbox
+        gateway = GatewayClient(config.gateway_url, config.internal_token)
+        scheduler = Scheduler(
+            store=store, sessions=sessions, agents=agents, messages=messages, actor=actor,
+            paseo=paseo, outbox=outbox, gateway=gateway, config=config,
+            registry=self._current_registry,
         )
-        sender = _ContextSender(self.context)
-        upgrade_runs = UpgradeRunsRepo(store)
-        upgrade_daemon = WSDaemonControl(
-            base_url=config.paseo_url,
-            password=config.paseo_password,
+        self._scheduler = scheduler
+        intake = ReplyIntake(
+            store=store, sessions=sessions, agents=agents, outbox=outbox,
+            reports=ReportPublisher(store=store, config=config), renderer=renderer,
+            scheduler=scheduler, config=config,
         )
-        self._upgrade_daemon = upgrade_daemon
-        conductor = UpgradeDriver(
-            daemon=upgrade_daemon,
-            repo=upgrade_runs,
-            event_sink=_UpgradeEventSink(
-                sender=sender,
-                runs=upgrade_runs,
-                renderer=renderer,
-            ),
-            fixed_main=config.paseo_cwd,
-            deploy_target="/srv/alicedev/bot",
-            provider=config.paseo_provider,
-            paseo_link=lambda workspace_id: (
-                (
-                    f"{config.public_base_url.rstrip('/')}/workspace/{workspace_id}"
-                    if workspace_id
-                    else f"{config.public_base_url.rstrip('/')}/workspace/alicedev"
-                )
-                if config.public_base_url
-                else ""
-            ),
+        self._api = InternalApi(
+            config=config, intake=intake, sessions=sessions, agents=agents, scheduler=scheduler,
+            outbox=outbox, registry=self._current_registry, platforms_fn=self._platform_names,
+            generation=_next_generation(data_dir),
+        )
+        self._dispatcher = Dispatcher(
+            config=config, store=store, sessions=sessions, favorites=favorites,
+            scheduler=scheduler, outbox=outbox,
+            github=GithubClient(config.github_token, config.default_repo),
+            registry=self._current_registry,
+        )
+        self._sweeper = IdleSweeper(
+            agents=agents, actor=actor, config=config,
+            is_conversational=scheduler.is_conversational_agent,
         )
 
-        registry = CommandRegistry()
-
-        api = InternalApi(
-            config=config, store=store, sessions=sessions_repo, templates=templates,
-            commands=registry, renderer=renderer, sender=sender,
-            platforms_fn=self._platform_names,
-        )
-        services = Services(
-            store=store, templates=templates, paseo=paseo, sessions=actor,
-            render=render, gateway=gateway, github=github, config=config,
-            internal_api=api, conductor=conductor,
-        )
-        self._services = services
-
-        # Built-in command registration (each slice's register()).
-        requirement.register(registry, services)
-        continuation.register(registry, services)
-        favorites.register(registry, services)
-        lists.register(registry, services)
-        links.register(registry, services)
-        interpret.register(registry, services)
-        archive.register(registry, services)
-        help.register(registry, services)
-        upgrade.register(registry, services)
-
-        self._dispatcher = CommandDispatcher(registry, services)
-
-        await actor.start()
-        await api.start()
-        self._sweeper = IdleSweeper(sessions=sessions_repo, actor=actor, config=config)
+        outbox.start()
+        await self._api.start()
         self._sweeper.start()
+        await scheduler.recover()
         _LOG.info(
-            "alicedev initialized: %d commands, %d templates",
-            len(registry.all()), len(templates.all()),
+            "alicedev initialized: %d commands, %d scenarios, %d DSL errors",
+            len(registry.command_list()), len(registry.scenarios), len(registry.errors),
         )
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -299,20 +165,20 @@ class AliceDevPlugin(Star):
         if self._dispatcher is None:
             return
         try:
-            await self._dispatcher.handle_message(event)
+            await self._dispatcher.handle_event(event)
         except Exception:  # noqa: BLE001 - never crash the adapter pipeline
             _LOG.exception("message dispatch failed")
 
     async def terminate(self) -> None:
-        # Draining order: stop accepting -> sweeper -> paseo transport -> store.
+        # Stop accepting replies → sweeper → scheduler tasks → outbox worker → store.
         if self._api is not None:
             await self._api.stop()
         if self._sweeper is not None:
             await self._sweeper.stop()
-        if self._upgrade_daemon is not None:
-            await self._upgrade_daemon.aclose()
-        if self._paseo is not None:
-            await self._paseo.aclose()
+        if self._scheduler is not None:
+            await self._scheduler.stop()
+        if self._outbox is not None:
+            await self._outbox.stop()
         if self._store is not None:
             await self._store.close()
 

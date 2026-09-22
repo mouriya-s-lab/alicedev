@@ -51,24 +51,20 @@ class GithubClient:
         return self.parse(text)
 
     @staticmethod
-    def to_template_vars(item: GithubItem) -> "TemplateVars":
-        """Build the registry's typed Jinja context for a fetched item."""
+    def to_prompt_var(item: GithubItem) -> dict[str, object]:
+        """The ``github`` prompt/title variable (ARCHITECTURE §3.4)."""
 
-        from alicedev.templates.registry import GithubVar, TemplateVars
-
-        return TemplateVars(
-            github=GithubVar(
-                kind=item.kind.value,
-                owner=item.owner,
-                repo=item.repo,
-                number=item.number,
-                title=item.title,
-                body=item.body,
-                labels=item.labels,
-                state=item.state,
-                url=item.url,
-            )
-        )
+        return {
+            "kind": item.kind.value,
+            "owner": item.owner,
+            "repo": item.repo,
+            "number": item.number,
+            "title": item.title,
+            "body": item.body,
+            "labels": list(item.labels),
+            "state": item.state,
+            "url": item.url,
+        }
 
     async def fetch(self, ref: GithubRef) -> GithubItem:
         """Fetch one issue or PR and normalize it into :class:`GithubItem`."""

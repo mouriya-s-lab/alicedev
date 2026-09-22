@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 from urllib.parse import quote
 
 from alicedev import dsl_api
+from alicedev.dsl.messages import STATE_DEFAULT_KEY, state_key
+from alicedev.dsl.render import MESSAGE_VARS, PROMPT_VARS, TITLE_VARS, context
 from alicedev.dsl.model import (
     ARCHIVED,
     BUILTIN_STATES,
@@ -180,7 +182,7 @@ class Scheduler:
                     existing = await self._sessions.get(int(seen[0])) if seen[0] is not None else None
                     return StartResult(StartOutcome.DUPLICATE, existing)
             try:
-                title = dsl_api.render(scenario.title, dict(req.input))
+                title = dsl_api.render(scenario.title, context(TITLE_VARS, dict(req.input)))
             except Exception:  # noqa: BLE001 - a bad title must not block the session
                 _LOG.exception("title render failed for scenario %s", scenario.name)
                 title = scenario.name
@@ -262,8 +264,6 @@ class Scheduler:
                         )
         fresh = await self._sessions.get(row.session_id)
         assert fresh is not None
-        if notify:
-            await self._notice(fresh, "session_dispatched")
         ok, reason = await self._enter(fresh, scenario.initial, by=EnteredBy.SYSTEM, notify=notify,
                                        trigger_msg_ref=trigger_msg_ref)
         return ok, reason
@@ -328,18 +328,16 @@ class Scheduler:
                     return False, why
                 return True, ""
             case HumanState():
+                # An AI-entered state's message is the AI reply (share link
+                # appended by the §6 intake); otherwise post the state text.
                 if by is not EnteredBy.AI:
-                    await self._state_notice(row, reason)
-                if state.share:
-                    await self._share_link(row)
+                    await self._state_notice(row, reason, share=state.share)
                 return True, ""
             case TerminalState():
-                if by is EnteredBy.SYSTEM and not notify and row.state in (FAILED, MAIN_SYNC_FAILED):
-                    pass  # the caller reports the failure synchronously
-                elif by is not EnteredBy.AI and row.state != ARCHIVED:
-                    await self._state_notice(row, reason)
-                if state.share:
-                    await self._share_link(row)
+                silent = (by is EnteredBy.SYSTEM and not notify
+                          and row.state in (FAILED, MAIN_SYNC_FAILED) and not state.share)
+                if by is not EnteredBy.AI and row.state != ARCHIVED and not silent:
+                    await self._state_notice(row, reason, share=state.share)
                 await self._finish(row)
                 return row.state not in (FAILED, MAIN_SYNC_FAILED), reason
         return True, ""
@@ -360,7 +358,9 @@ class Scheduler:
                 cwd = row.worktree_path or ""
         agent_ref = new_agent_ref()
         try:
-            prompt = dsl_api.render(state.prompt, self.prompt_vars(row, scenario, state, agent_ref))
+            prompt = dsl_api.render(
+                state.prompt, context(PROMPT_VARS, self.prompt_vars(row, scenario, state, agent_ref))
+            )
             prompt = prompt.rstrip() + "\n\n" + dsl_api.reply_instructions(scenario, state)
         except Exception as exc:  # noqa: BLE001 - render errors are reported, not raised
             _LOG.exception("prompt render failed for %s/%s", scenario.name, state.name)
@@ -380,13 +380,14 @@ class Scheduler:
     def prompt_vars(
         self, row: "SessionRow", scenario: Scenario, state: AgentState, agent_ref: str
     ) -> dict[str, Any]:
-        base = {
+        base: dict[str, Any] = {
             "text": "", "sender": None, "chat": None, "quoted": None, "images": [], "github": None,
+            "repo": None,
         }
         base.update(dict(row.input))
         base.update(
             {
-                "session": {"no": row.no, "name": row.name},
+                "session": self._session_ctx(row),
                 "reports_dir": f"{str(self._config.reports_root).rstrip('/')}/s{row.session_id}/",
                 "data": dict(row.data),
                 "state": state.name,
@@ -433,14 +434,17 @@ class Scheduler:
         scenario = self.scenario(row.scenario)
         if scenario is None:
             return "not_allowed"
-        try:
-            state = scenario.state(row.state)
-        except KeyError:
-            return "not_allowed"
-        if not isinstance(state, HumanState) or command not in state.commands:
-            return "not_allowed"
         async with self._lock(scenario.name):
-            await self._enter(row, state.commands[command], by=EnteredBy.HUMAN, notify=True)
+            fresh = await self._sessions.get(row.session_id)
+            if fresh is None:
+                return "not_allowed"
+            try:
+                state = scenario.state(fresh.state)
+            except KeyError:
+                return "not_allowed"
+            if not isinstance(state, HumanState) or command not in state.commands:
+                return "not_allowed"
+            await self._enter(fresh, state.commands[command], by=EnteredBy.HUMAN, notify=True)
         return "ok"
 
     async def archive(self, row: "SessionRow") -> str:
@@ -491,20 +495,23 @@ class Scheduler:
             _LOG.warning("messages.yaml has no %r; notice for session %s skipped", key, row.session_id)
             return
         try:
-            text = dsl_api.render(tmpl, {"session": self._session_ctx(row), **extra})
+            text = dsl_api.render(
+                tmpl, context(MESSAGE_VARS, {"session": self._session_ctx(row), **extra})
+            )
         except Exception:  # noqa: BLE001
             _LOG.exception("notice %s render failed", key)
             return
         await self._outbox.enqueue_text(row.chat_key, text, session_id=row.session_id)
 
-    async def _state_notice(self, row: "SessionRow", reason: str) -> None:
-        messages = self._registry().messages
-        key = f"state_entered.{row.state}"
-        if key not in messages:
-            key = {FAILED: "agent_create_failed", MAIN_SYNC_FAILED: "main_sync_failed"}.get(
-                row.state, "state_entered"
-            )
-        await self._notice(row, key, reason=reason, state=row.state)
+    async def _state_notice(self, row: "SessionRow", reason: str, *, share: bool) -> None:
+        link = await self._creator_link(row) if share else None
+        key = state_key(row.state)
+        if key not in self._registry().messages:
+            key = STATE_DEFAULT_KEY
+        text_ctx: dict[str, Any] = {"reason": reason or None, "data": dict(row.data), "link": link}
+        await self._notice(row, key, **text_ctx)
+        if link and "link" not in self._registry().messages[key].source:
+            await self._outbox.enqueue_text(row.chat_key, link, session_id=row.session_id)
 
     def share_target(self, row: "SessionRow", agent: AgentRow | None, server_id: str | None) -> str | None:
         if not server_id:
@@ -538,14 +545,15 @@ class Scheduler:
             )
         return issued.url
 
-    async def _share_link(self, row: "SessionRow") -> None:
+    async def _creator_link(self, row: "SessionRow") -> str | None:
+        """``share: true``: one-time link for the session creator (§3.4)."""
         try:
-            url = await self.issue_link(row, user_key=row.created_by, issued_by="alicedev")
+            return await self.issue_link(row, user_key=row.created_by, issued_by="alicedev")
         except Exception:  # noqa: BLE001 - a missing link must not break the state change
             _LOG.exception("share link for session %s failed", row.session_id)
-            url = None
-        if url:
-            await self._notice(row, "share_link", url=url)
+            return None
+
+    creator_link = _creator_link
 
     # --- restart recovery ---------------------------------------------------------------
 

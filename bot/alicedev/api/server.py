@@ -1,8 +1,8 @@
 """Internal HTTP API server (ARCHITECTURE §6).
 
-Runs inside the plugin process on the docker network (``X-Alicedev-Token``).
-Owns reply delivery (at-most-once + idempotent replay), status, and health, plus
-the ``initialize``/``terminate`` draining lifecycle.
+Runs inside the plugin process on the docker network (``X-Alicedev-Token``):
+``/v1/reply`` (enqueue), ``/v1/agents/{agent}``, ``/v1/status``, ``/v1/health``,
+plus the ``initialize``/``terminate`` draining lifecycle.
 """
 
 from __future__ import annotations
@@ -10,32 +10,32 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, Callable
 
 from aiohttp import web
 
-from alicedev.api.payloads import InvalidPayload, parse_reply_payload, payload_digest
-from alicedev.api.reply import ReplyRenderer, ReplyValidationError
-from alicedev.reports import ReportError
-from alicedev.store.replies_repo import ClaimOutcome, RepliesRepo
-from alicedev.store.upgrade_runs_repo import UpgradeRunsRepo, record_dict
+from alicedev.dsl.model import AgentState, Registry
 
 if TYPE_CHECKING:
-    from alicedev.commands.registry import CommandRegistry
+    from alicedev.api.intake import ReplyIntake
     from alicedev.config import PluginConfig
-    from alicedev.store.db import Store
+    from alicedev.outbox.service import Outbox
+    from alicedev.scheduler.engine import Scheduler
+    from alicedev.store.agents_repo import AgentsRepo
     from alicedev.store.sessions_repo import SessionsRepo
-    from alicedev.templates.registry import TemplateRegistry
 
 _LOG = logging.getLogger("alicedev.api.server")
 
 _DRAIN_TIMEOUT_S = 10.0
 
 
-class PlatformSender(Protocol):
-    async def send(self, chat_key: str, components: list[Any]) -> list[str]:
-        """Send a proactive message chain to a chat; return platform message ids."""
-        ...
+def read_revision(config: "PluginConfig") -> str:
+    """The deployed commit written by ``deployrun`` into ``bot/REVISION``."""
+    try:
+        return config.revision_path.read_text(encoding="utf-8").strip() or "unknown"
+    except OSError:
+        return "unknown"
 
 
 class InternalApi:
@@ -43,41 +43,44 @@ class InternalApi:
         self,
         *,
         config: "PluginConfig",
-        store: "Store",
+        intake: "ReplyIntake",
         sessions: "SessionsRepo",
-        templates: "TemplateRegistry",
-        commands: "CommandRegistry",
-        renderer: ReplyRenderer,
-        sender: PlatformSender,
+        agents: "AgentsRepo",
+        scheduler: "Scheduler",
+        outbox: "Outbox",
+        registry: Callable[[], Registry],
         platforms_fn: Callable[[], list[str]],
+        generation: int,
     ) -> None:
         self._config = config
-        self._store = store
+        self._intake = intake
         self._sessions = sessions
-        self._templates = templates
-        self._replies = RepliesRepo(store)
-        self._upgrades = UpgradeRunsRepo(store)
-        self._renderer = renderer
-        self._sender = sender
+        self._agents = agents
+        self._scheduler = scheduler
+        self._outbox = outbox
+        self._registry = registry
         self._platforms_fn = platforms_fn
+        self._generation = generation
+        self._revision = read_revision(config)
 
         self._app = web.Application(middlewares=[self._auth_and_drain])
         self._app.add_routes(
             [
                 web.post("/v1/reply", self._handle_reply),
-                web.post("/v1/upgrade/callback", self._handle_upgrade_callback),
-                web.get("/v1/upgrade/state", self._handle_upgrade_state),
-                web.get("/v1/sessions/{session}", self._handle_session),
+                web.get("/v1/agents/{agent}", self._handle_agent),
                 web.get("/v1/status", self._handle_status),
                 web.get("/v1/health", self._handle_health),
             ]
         )
         self._runner: web.AppRunner | None = None
         self._site: web.TCPSite | None = None
-        self._generation = 0
         self._started_at = time.monotonic()
         self._draining = False
         self._inflight = 0
+
+    @property
+    def app(self) -> web.Application:
+        return self._app
 
     @property
     def generation(self) -> int:
@@ -85,7 +88,6 @@ class InternalApi:
 
     async def start(self) -> None:
         self._draining = False
-        self._generation += 1
         self._started_at = time.monotonic()
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
@@ -97,8 +99,9 @@ class InternalApi:
         )
         await self._site.start()
         _LOG.info(
-            "internal API listening on %s:%s (generation=%d)",
-            self._config.internal_api_host, self._config.internal_api_port, self._generation,
+            "internal API listening on %s:%s (generation=%d revision=%s)",
+            self._config.internal_api_host, self._config.internal_api_port,
+            self._generation, self._revision,
         )
 
     async def stop(self) -> None:
@@ -113,13 +116,11 @@ class InternalApi:
             await self._runner.cleanup()
             self._runner = None
 
-    # --- middleware -----------------------------------------------------
-
     @web.middleware
     async def _auth_and_drain(self, request: web.Request, handler) -> web.StreamResponse:
         if self._draining:
             return web.json_response({"error": "draining"}, status=503)
-        if request.path != "/v1/health":  # liveness probe (compose healthcheck, reply-cli) carries no token
+        if request.path != "/v1/health":  # liveness probe carries no token
             token = request.headers.get("X-Alicedev-Token", "")
             if not self._config.internal_token or token != self._config.internal_token:
                 return web.json_response({"error": "unauthorized"}, status=401)
@@ -129,42 +130,52 @@ class InternalApi:
         finally:
             self._inflight -= 1
 
-    # --- handlers -------------------------------------------------------
-
     async def _handle_health(self, request: web.Request) -> web.StreamResponse:
-        return web.json_response({"generation": self._generation})
+        return web.json_response({"generation": self._generation, "revision": self._revision})
 
     async def _handle_status(self, request: web.Request) -> web.StreamResponse:
-        counts = await self._sessions.counts()
+        registry = self._registry()
+        sessions = await self._sessions.counts(self._scheduler.ended_states())
+        agents = await self._agents.counts()
         return web.json_response(
             {
                 "ok": not self._draining,
                 "generation": self._generation,
+                "revision": self._revision,
                 "uptime_s": int(time.monotonic() - self._started_at),
                 "platforms": self._platforms_fn(),
-                "commands": [c.name for c in self._commands.all()],
-                "templates": [t.name for t in self._templates.all()],
-                "sessions": {
-                    "active": counts.get("active", 0),
-                    "closed": counts.get("closed", 0),
-                },
+                "commands": [c.name for c in registry.command_list()],
+                "scenarios": sorted(registry.scenarios),
+                "dsl_errors": [asdict(e) for e in registry.errors],
+                "sessions": sessions,
+                "agents": {"active": agents.get("active", 0), "closed": agents.get("closed", 0)},
+                "outbox_pending": await self._outbox.repo.pending_count(),
             }
         )
 
-    async def _handle_session(self, request: web.Request) -> web.StreamResponse:
-        session_ref = request.match_info["session"]
-        record = await self._sessions.get(session_ref)
-        if record is None:
-            return web.json_response({"error": "session_unknown"}, status=404)
-        tpl = self._templates.by_name(record.template)
-        reply_spec = _reply_spec_dict(tpl.reply) if tpl else None
+    async def _handle_agent(self, request: web.Request) -> web.StreamResponse:
+        agent = await self._agents.get(request.match_info["agent"])
+        if agent is None:
+            return web.json_response({"error": "agent_unknown"}, status=404)
+        row = await self._sessions.get(agent.session_id)
+        if row is None:
+            return web.json_response({"error": "agent_unknown"}, status=404)
+        reply_spec: dict[str, Any] | None = None
+        scenario = self._scheduler.scenario(row.scenario)
+        if scenario is not None:
+            try:
+                state = scenario.state(agent.state)
+            except KeyError:
+                state = None
+            if isinstance(state, AgentState) and state.reply is not None:
+                reply_spec = asdict(state.reply)
         return web.json_response(
             {
-                "session": record.session_ref,
-                "chat_key": record.chat_key,
-                "template": record.template,
-                "name": record.name,
-                "status": record.status.value,
+                "agent": agent.agent_ref,
+                "session_no": row.no,
+                "chat_key": row.chat_key,
+                "state": agent.state,
+                "status": agent.status.value,
                 "reply_spec": reply_spec,
             }
         )
@@ -172,233 +183,7 @@ class InternalApi:
     async def _handle_reply(self, request: web.Request) -> web.StreamResponse:
         try:
             body = await request.json()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return web.json_response({"error": "invalid_payload"}, status=400)
-
-        session_ref = body.get("session")
-        reply_id = body.get("reply_id")
-        msgs = body.get("msgs")
-        raw_reply = body.get("reply")
-        if not isinstance(session_ref, str) or not isinstance(reply_id, str):
-            return web.json_response({"error": "invalid_payload"}, status=400)
-        if not isinstance(msgs, list) or not all(isinstance(m, str) for m in msgs):
-            return web.json_response({"error": "invalid_payload"}, status=400)
-
-        record = await self._sessions.get(session_ref)
-        if record is None:
-            return web.json_response({"error": "session_unknown"}, status=404)
-
-        tpl = self._templates.by_name(record.template)
-        if tpl is None:
-            return web.json_response({"error": "template_unknown"}, status=400)
-
-        try:
-            payload = parse_reply_payload(raw_reply)
-            self._renderer.validate(payload, tpl.reply)
-        except InvalidPayload:
-            return web.json_response({"error": "invalid_payload"}, status=400)
-        except ReplyValidationError as exc:
-            return web.json_response({"error": exc.error}, status=400)
-
-        digest = payload_digest(raw_reply)
-
-        # Claim under the store lock so the check-then-write is atomic.
-        async with self._store.lock:
-            claim = await self._replies.claim(
-                reply_id=reply_id, session_ref=session_ref, msgs=list(msgs),
-                payload_sha256=digest,
-            )
-        if claim.outcome is ClaimOutcome.CONFLICT:
-            return web.json_response({"error": "reply_id_conflict"}, status=409)
-        if claim.outcome is ClaimOutcome.REPLAY:
-            return web.json_response(
-                {"status": "replayed", "platform_message_ids": claim.platform_message_ids}
-            )
-
-        # Fresh claim: render, send, record.
-        try:
-            rendered = await self._renderer.render(payload, tpl.reply)
-        except ReplyValidationError as exc:
-            await self._replies.mark_failed(reply_id)
-            return web.json_response({"error": exc.error}, status=400)
-        except ReportError as exc:
-            await self._replies.mark_failed(reply_id)
-            return web.json_response({"error": exc.error}, status=400)
-
-        try:
-            ids = await self._sender.send(record.chat_key, rendered.components)
-        except Exception as exc:  # noqa: BLE001 - map any adapter failure to 502
-            _LOG.exception("platform send failed for %s", session_ref)
-            await self._replies.mark_failed(reply_id)
-            return web.json_response(
-                {"error": "platform_send_failed", "detail": str(exc)}, status=502
-            )
-
-        async with self._store.lock:
-            await self._replies.mark_sent(reply_id, ids)
-            for pmid in ids:
-                await self._store.execute(
-                    "INSERT INTO outbound (platform_message_id, chat_key, session_ref) "
-                    "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-                    (pmid, record.chat_key, session_ref),
-                )
-        await self._sessions.touch(session_ref)
-
-        out: dict[str, Any] = {"status": "sent", "platform_message_ids": ids}
-        if rendered.report_url:
-            out["report_url"] = rendered.report_url
-        return web.json_response(out)
-
-
-    async def _handle_upgrade_state(self, request: web.Request) -> web.StreamResponse:
-        chat_key = request.query.get("chat", "").strip()
-        if not chat_key:
-            return web.json_response({"error": "chat_required"}, status=400)
-        record = await self._upgrades.latest_for_chat(chat_key)
-        return web.json_response({"run": record_dict(record) if record else None})
-
-    async def _handle_upgrade_callback(self, request: web.Request) -> web.StreamResponse:
-        try:
-            body = await request.json()
-        except Exception:
-            return web.json_response({"error": "invalid_payload"}, status=400)
-        if not isinstance(body, dict):
-            return web.json_response({"error": "invalid_payload"}, status=400)
-
-        event = body.get("event")
-        run_id = body.get("run_id")
-        if not isinstance(event, str) or not isinstance(run_id, str) or not run_id.strip():
-            return web.json_response({"error": "invalid_payload"}, status=400)
-        record = await self._upgrades.get(run_id)
-        if record is None:
-            return web.json_response({"error": "upgrade_run_unknown"}, status=404)
-
-        if event == "candidate_ready":
-            commit = body.get("commit")
-            explain_img = body.get("explain_img")
-            evidence_img = body.get("evidence_img")
-            if not all(
-                isinstance(value, str) and value.strip()
-                for value in (commit, explain_img, evidence_img)
-            ):
-                return web.json_response({"error": "invalid_payload"}, status=400)
-            assert isinstance(commit, str)
-            assert isinstance(explain_img, str)
-            assert isinstance(evidence_img, str)
-            if not await self._upgrades.mark_candidate_ready(
-                run_id,
-                commit=commit,
-                evidence_refs={
-                    "explain_img": explain_img,
-                    "evidence_img": evidence_img,
-                },
-            ):
-                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
-            try:
-                from astrbot.api.message_components import Plain  # local: astrbot-only
-
-                components = [
-                    Plain(
-                        f"候选已就绪：{run_id}\n"
-                        f"candidate commit：{commit}\n"
-                        f"批准：/升级bot approve {run_id} {commit}\n"
-                        f"拒绝：/升级bot reject {run_id}"
-                    ),
-                    self._renderer.render_inline_image(explain_img),
-                    self._renderer.render_inline_image(evidence_img),
-                ]
-            except (ReportError, ReplyValidationError, ValueError) as exc:
-                _LOG.exception("upgrade candidate image render failed: run=%s", run_id)
-                return web.json_response({"error": str(exc) or "image_invalid"}, status=400)
-            try:
-                await self._sender.send(record.chat_key, components)
-            except Exception as exc:  # noqa: BLE001
-                _LOG.exception("upgrade candidate callback send failed: run=%s", run_id)
-                return web.json_response(
-                    {"error": "platform_send_failed", "detail": str(exc)}, status=502
-                )
-            # The transient candidate_ready state records successful artifact
-            # production; once both images are delivered, wait for the human.
-            await self._upgrades.mark_awaiting_approval(run_id)
-            return web.json_response(
-                {
-                    "status": "sent",
-                    "run": record_dict(await self._upgrades.get(run_id)),
-                }
-            )
-
-        if event == "main_sync_failed":
-            reason = body.get("reason")
-            paseo_link = body.get("paseo_link")
-            if not isinstance(reason, str) or not isinstance(paseo_link, str):
-                return web.json_response({"error": "invalid_payload"}, status=400)
-            if not await self._upgrades.mark_main_sync_failed(run_id):
-                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
-            from astrbot.api.message_components import Plain  # local: astrbot-only
-
-            text = f"升级运行 {run_id}：fixed-main 对齐失败。\n{reason}"
-            if paseo_link.strip():
-                text += f"\nPaseo：{paseo_link.strip()}"
-            await self._sender.send(record.chat_key, [Plain(text)])
-            return web.json_response(
-                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
-            )
-
-        if event == "e2e_not_converging":
-            round_summaries = body.get("round_summaries")
-            paseo_link = body.get("paseo_link")
-            if not isinstance(round_summaries, (str, list, tuple)) or not isinstance(
-                paseo_link, str
-            ):
-                return web.json_response({"error": "invalid_payload"}, status=400)
-            if not await self._upgrades.mark_failed(run_id):
-                return web.json_response({"error": "upgrade_run_unknown"}, status=404)
-            from astrbot.api.message_components import Plain  # local: astrbot-only
-            import json
-
-            if isinstance(round_summaries, str):
-                summary = round_summaries
-            else:
-                summary = json.dumps(round_summaries, ensure_ascii=False)
-            text = f"升级运行 {run_id}：E2E 连续 5 轮未收敛。\n{summary}"
-            if paseo_link.strip():
-                text += f"\nPaseo：{paseo_link.strip()}"
-            await self._sender.send(record.chat_key, [Plain(text)])
-            return web.json_response(
-                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
-            )
-
-        if event == "deploy_result":
-            outcome = body.get("outcome")
-            paseo_link = body.get("paseo_link")
-            if outcome not in {"active", "rolled_back", "rollback_failed"}:
-                return web.json_response({"error": "invalid_payload"}, status=400)
-            if paseo_link is not None and not isinstance(paseo_link, str):
-                return web.json_response({"error": "invalid_payload"}, status=400)
-            if not await self._upgrades.mark_deploy_result(run_id, str(outcome)):
-                return web.json_response({"error": "invalid_transition"}, status=409)
-            from astrbot.api.message_components import Plain  # local: astrbot-only
-
-            labels = {
-                "active": "已上线并核实运行",
-                "rolled_back": "核实失败，已自动回滚",
-                "rollback_failed": "核实失败且自动回滚失败，需要人工介入",
-            }
-            text = f"升级运行 {run_id}：{labels[str(outcome)]}。"
-            if isinstance(paseo_link, str) and paseo_link.strip():
-                text += f"\nPaseo：{paseo_link.strip()}"
-            await self._sender.send(record.chat_key, [Plain(text)])
-            return web.json_response(
-                {"status": "sent", "run": record_dict(await self._upgrades.get(run_id))}
-            )
-
-        return web.json_response({"error": "event_unknown"}, status=400)
-
-def _reply_spec_dict(reply) -> dict[str, Any]:
-    return {
-        "kinds": list(reply.kinds),
-        "image_templates": list(reply.image_templates),
-        "text_templates": list(reply.text_templates),
-        "stickers": list(reply.stickers),
-        "max_text_chars": reply.max_text_chars,
-    }
+        result = await self._intake.handle(body)
+        return web.json_response(dict(result.body), status=result.status)
