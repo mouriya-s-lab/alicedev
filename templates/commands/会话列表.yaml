@@ -1,7 +1,7 @@
 # 列出本群的会话（卡片图）；子指令「全部」包含已结束的会话。
 name: 会话列表
 type: program
-aliases: [sessions]
+aliases: [sessions, sl]
 summary: 查看本群进行中的会话
 usage: /会话列表 [页]
 examples:
