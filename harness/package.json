@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node test/prepare.mjs && node --test test/"
   },
   "devDependencies": {
     "@oh-my-pi/pi-coding-agent": "18.1.17",

@@ -5,9 +5,9 @@ export const CONSUMED_ENTRY_TYPE = "alicedev.consumed" as const;
 export const REMINDED_ENTRY_TYPE = "alicedev.reminded" as const;
 
 export interface PendingEntryData {
-	readonly session: string;
+	readonly agent: string;
 	readonly msg: string;
-	readonly text?: string;
+	readonly text: string;
 }
 
 export interface ConsumedEntryData {
@@ -45,14 +45,14 @@ function copyMessages(msgs: readonly string[]): string[] {
 	return msgs.map((msg, index) => assertNonEmptyString(msg, `msgs[${index}]`));
 }
 
-export function serializePendingEntry(session: string, msg: string, text?: string): PendingDurableEntry {
-	const data: PendingEntryData = {
-		session: assertNonEmptyString(session, "session"),
-		msg: assertNonEmptyString(msg, "msg"),
-	};
+export function serializePendingEntry(agent: string, msg: string, text: string): PendingDurableEntry {
 	return {
 		customType: PENDING_ENTRY_TYPE,
-		data: text === undefined ? data : { ...data, text },
+		data: {
+			agent: assertNonEmptyString(agent, "agent"),
+			msg: assertNonEmptyString(msg, "msg"),
+			text,
+		},
 	};
 }
 
@@ -88,13 +88,14 @@ export function parseDurableEntry(customType: string, value: unknown): DurableEn
 
 	switch (customType) {
 		case PENDING_ENTRY_TYPE: {
-			if (typeof value.session !== "string" || value.session.trim().length === 0) return undefined;
+			// Entries written before the agent rename carry the same ref under `session`.
+			const agent = typeof value.agent === "string" ? value.agent : value.session;
+			if (typeof agent !== "string" || agent.trim().length === 0) return undefined;
 			if (typeof value.msg !== "string" || value.msg.trim().length === 0) return undefined;
 			if (value.text !== undefined && typeof value.text !== "string") return undefined;
-			const data: PendingEntryData = { session: value.session, msg: value.msg };
 			return {
 				customType: PENDING_ENTRY_TYPE,
-				data: typeof value.text === "string" ? { ...data, text: value.text } : data,
+				data: { agent, msg: value.msg, text: typeof value.text === "string" ? value.text : "" },
 			};
 		}
 		case CONSUMED_ENTRY_TYPE: {

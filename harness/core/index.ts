@@ -20,6 +20,11 @@ export type {
 } from "./durable.js";
 export { PendingStore, pendingSetSignature } from "./pending-store.js";
 export type { PendingMessage } from "./pending-store.js";
-export { parseReplySuccess } from "./reply-payload.js";
-export type { ReplyPayload, ReplyStatus, ReplySuccess } from "./reply-payload.js";
+export {
+	parseReplyPayload,
+	parseReplyRequest,
+	parseReplySuccess,
+	parseTransition,
+} from "./reply-payload.js";
+export type { ReplyPayload, ReplyRequest, ReplyStatus, ReplySuccess, Transition } from "./reply-payload.js";
 export { isRecord } from "./guards.js";

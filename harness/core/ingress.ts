@@ -1,7 +1,8 @@
 import { isRecord } from "./guards.js";
 
+/** Parsed `/chat_ingress {"agent":"a_…","msg":"m_…","text":"…"}` payload (ARCHITECTURE §5). */
 export interface IngressMessage {
-	readonly session: string;
+	readonly agent: string;
 	readonly msg: string;
 	readonly text: string;
 }
@@ -12,7 +13,6 @@ function requiredString(value: unknown, field: keyof IngressMessage): string {
 	}
 	return value;
 }
-
 
 export function parseIngress(raw: string): IngressMessage {
 	let value: unknown;
@@ -25,7 +25,7 @@ export function parseIngress(raw: string): IngressMessage {
 	if (!isRecord(value)) throw new Error("Invalid chat ingress: expected a JSON object");
 
 	return {
-		session: requiredString(value.session, "session"),
+		agent: requiredString(value.agent, "agent"),
 		msg: requiredString(value.msg, "msg"),
 		text: requiredString(value.text, "text"),
 	};

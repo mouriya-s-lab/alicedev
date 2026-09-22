@@ -80,7 +80,7 @@ export class PendingStore {
 		for (const entry of entries) {
 			switch (entry.customType) {
 				case "alicedev.pending":
-					this.add(entry.data.msg, entry.data.text ?? "");
+					this.add(entry.data.msg, entry.data.text);
 					break;
 				case "alicedev.consumed":
 					this.markConsumed(entry.data.msgs);

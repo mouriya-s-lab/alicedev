@@ -8,37 +8,47 @@ function writeJson(stream, value) {
 	stream.write(`${JSON.stringify(value)}\n`);
 }
 
+class UsageError extends Error {}
+
 function parseArgs(argv) {
 	const values = new Map();
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
-		if (!arg.startsWith("--")) throw new Error(`unexpected argument: ${arg}`);
+		if (!arg.startsWith("--")) throw new UsageError(`unexpected argument: ${arg}`);
 		const key = arg.slice(2);
-		if (key !== "session" && key !== "reply-id" && key !== "msgs" && key !== "json") {
-			throw new Error(`unknown argument: ${arg}`);
+		if (key !== "agent" && key !== "reply-id" && key !== "msgs" && key !== "json") {
+			throw new UsageError(`unknown argument: ${arg}`);
 		}
 		const value = argv[index + 1];
-		if (value === undefined || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
+		if (value === undefined || value.startsWith("--")) throw new UsageError(`missing value for ${arg}`);
 		values.set(key, value);
 		index += 1;
 	}
-	for (const key of ["session", "reply-id", "msgs", "json"]) {
-		if (!values.has(key)) throw new Error(`missing --${key}`);
+	for (const key of ["agent", "reply-id", "msgs", "json"]) {
+		if (!values.has(key)) throw new UsageError(`missing --${key}`);
 	}
-	const json = values.get("json");
-	let reply;
+	let payload;
 	try {
-		reply = JSON.parse(json);
+		payload = JSON.parse(values.get("json"));
 	} catch {
-		throw new Error("--json must contain valid JSON");
+		throw new UsageError("--json must contain valid JSON");
+	}
+	if (!isObject(payload)) throw new UsageError("--json must be an object {reply?, transition?}");
+	if (payload.reply === undefined && payload.transition === undefined) {
+		throw new UsageError("--json needs reply and/or transition");
+	}
+	for (const key of Object.keys(payload)) {
+		if (key !== "reply" && key !== "transition") throw new UsageError(`--json has unknown key: ${key}`);
 	}
 	const msgsValue = values.get("msgs");
-	return {
-		session: values.get("session"),
+	const request = {
+		agent: values.get("agent"),
 		reply_id: values.get("reply-id"),
 		msgs: msgsValue === "" ? [] : msgsValue.split(","),
-		reply,
 	};
+	if (payload.reply !== undefined) request.reply = payload.reply;
+	if (payload.transition !== undefined) request.transition = payload.transition;
+	return request;
 }
 
 function responseValue(text) {
@@ -117,7 +127,7 @@ async function requestReply(request) {
 			}
 			retry += 1;
 			continue;
-			}
+		}
 
 		const text = await response.text();
 		const value = responseValue(text);
@@ -130,8 +140,8 @@ async function requestReply(request) {
 			continue;
 		}
 
-		if (response.status === 200) {
-			if (!isObject(value) || (value.status !== "sent" && value.status !== "replayed")) {
+		if (response.status === 202) {
+			if (!isObject(value) || (value.status !== "queued" && value.status !== "replayed")) {
 				writeJson(process.stderr, isObject(value) ? value : { error: "invalid_response" });
 				return 1;
 			}
@@ -139,20 +149,17 @@ async function requestReply(request) {
 			return 0;
 		}
 
-		if (response.status === 400 || response.status === 404 || response.status === 409 || response.status === 502) {
-			writeJson(process.stderr, isObject(value) ? value : { error: `http_${response.status}` });
-			return 1;
-		}
-
 		writeJson(process.stderr, isObject(value) ? value : { error: `http_${response.status}` });
 		return 1;
 	}
 }
 
+// Exit codes: 0 = enqueued (stdout {"status":"queued"|"replayed"}),
+// 1 = rejected or unreachable (stderr JSON), 2 = invalid arguments (stderr JSON).
 try {
 	const request = parseArgs(process.argv.slice(2));
 	process.exitCode = await requestReply(request);
 } catch (error) {
 	writeJson(process.stderr, { error: error instanceof Error ? error.message : "invalid_arguments" });
-	process.exitCode = 1;
+	process.exitCode = error instanceof UsageError ? 2 : 1;
 }
