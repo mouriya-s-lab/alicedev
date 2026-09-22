@@ -17,7 +17,7 @@
 
 ## 3. 线上现状（nekoringo2，2026-09-23）
 
-- **版本**：alicedev `main` = `feat/upgrade-bot-loop` = `1198e20`；宿主检出 `/srv/alicedev/app` 在该 SHA，`/v1/health` 的 `revision` 一致；nekoringo-iac `apps/alicedev` 的 `alicedev_revision` 同为 `1198e20` 且已 apply。
+- **版本**：`feat/upgrade-bot-loop` 已快进合入 `main`；宿主检出 `/srv/alicedev/app`、bot `/v1/health` 的 `revision`、nekoringo-iac `apps/alicedev` 的 `alicedev_revision` 都是 main 的最新提交（核对：`deployctl status --app /deploy/app`）。
 - **容器**：`deploy` 项目 `caddy` `gateway` `astrbot` `snowluma` `paseo` `t2i` 常驻；`alicedev-e2e`（`init` + `astrbot` + `t2i`）与 `alicedev-tg-cli` 两个独立项目常驻。镜像：`alicedev/paseo:local`（上游 `mouriya-s-lab/paseo@7ab7c444d` 原样构建的基础镜像 + 运行层）、`alicedev/astrbot:local`（预装插件依赖）、`alicedev/gateway:local`。
 - **数据**：DuckDB schema v3 迁移完成（旧会话、当前指针、需求列表都迁入，%1–%4 为旧会话）。
 - **fixed-main** `/workspace/alicedev`：干净，停在 `80161d5`；下一个 `/升级bot` 派发时由 `mainsync` 快进。
