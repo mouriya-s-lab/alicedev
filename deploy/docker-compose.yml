@@ -120,7 +120,8 @@ services:
     image: alicedev/astrbot:local
     platform: linux/amd64
     build:
-      context: ${ALICEDEV_APP_DIR:-../app}/deploy/astrbot
+      context: ${ALICEDEV_APP_DIR:-../app}
+      dockerfile: deploy/astrbot/Dockerfile
     container_name: alicedev-astrbot
     restart: unless-stopped
     init: true

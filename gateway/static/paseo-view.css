@@ -11,8 +11,10 @@
  * agent-browser after every Paseo upgrade (see gateway/README.md).
  */
 
-/* Desktop left sidebar: Animated.View > View > …, resize handle is a direct
-   child of the inner View.  Hide the outer container so its width collapses. */
+/* Desktop left sidebar: the outermost container that holds the sidebar's
+   buttons but not the workspace pane (verified on paseo 0.8.0 @7ab7c444d:
+   hiding it collapses the 320px column so the pane starts at x=0). */
+div:has([data-testid="sidebar-global-new-workspace"]):not(:has([data-testid="workspace-tabs-row"])),
 div:has(> div > [data-testid="left-sidebar-resize-handle"]),
 div:has(> [data-testid="left-sidebar-resize-handle"]) {
   display: none !important;

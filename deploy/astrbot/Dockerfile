@@ -20,3 +20,9 @@ m = t.getmember('docker/docker'); m.name = 'docker'; \
 t.extract(m, '/usr/local/bin')"; \
     chmod 0755 /usr/local/bin/docker; \
     docker --version
+
+# Pre-install the plugin's pinned dependencies so a container rebuild does not
+# pip-install them at plugin load (AstrBot still installs any newer
+# bot/requirements.txt entries itself on hot reload).
+COPY bot/requirements.txt /tmp/alicedev-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/alicedev-requirements.txt && rm /tmp/alicedev-requirements.txt

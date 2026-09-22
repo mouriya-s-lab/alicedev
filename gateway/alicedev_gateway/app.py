@@ -56,7 +56,7 @@ class BotCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class BotTemplate:
+class BotScenario:
     name: str
     description: str
 
@@ -68,9 +68,9 @@ class BotStatus:
     uptime_s: str
     platforms: tuple[str, ...]
     commands: tuple[BotCommand, ...]
-    templates: tuple[BotTemplate, ...]
+    scenarios: tuple[BotScenario, ...]
     active_sessions: str
-    closed_sessions: str
+    queued_sessions: str
     error: str | None = None
 
     @classmethod
@@ -81,9 +81,9 @@ class BotStatus:
             uptime_s="—",
             platforms=(),
             commands=(),
-            templates=(),
+            scenarios=(),
             active_sessions="—",
-            closed_sessions="—",
+            queued_sessions="—",
             error=error,
         )
 
@@ -370,9 +370,9 @@ def _parse_bot_status(payload: object) -> BotStatus:
         uptime_s=_display_value(payload.get("uptime_s")),
         platforms=_string_values(payload.get("platforms")),
         commands=_command_values(payload.get("commands")),
-        templates=_template_values(payload.get("templates")),
+        scenarios=_scenario_values(payload.get("scenarios")),
         active_sessions=_display_value(session_map.get("active")),
-        closed_sessions=_display_value(session_map.get("closed")),
+        queued_sessions=_display_value(session_map.get("queued")),
     )
 
 
@@ -396,19 +396,19 @@ def _command_values(value: object) -> tuple[BotCommand, ...]:
     return tuple(result)
 
 
-def _template_values(value: object) -> tuple[BotTemplate, ...]:
+def _scenario_values(value: object) -> tuple[BotScenario, ...]:
     if not isinstance(value, list):
         return ()
-    result: list[BotTemplate] = []
+    result: list[BotScenario] = []
     for item in value:
         if isinstance(item, str):
-            result.append(BotTemplate(name=item, description=""))
+            result.append(BotScenario(name=item, description=""))
         elif isinstance(item, Mapping):
             name = item.get("name")
             if isinstance(name, str) and name:
                 description = item.get("description")
                 result.append(
-                    BotTemplate(
+                    BotScenario(
                         name=name,
                         description=description if isinstance(description, str) else "",
                     )
@@ -438,8 +438,8 @@ def _render_status(status: BotStatus, target: str | None) -> str:
     commands = _render_items(
         (item.name, item.description) for item in status.commands
     )
-    templates = _render_items(
-        (item.name, item.description) for item in status.templates
+    scenarios = _render_items(
+        (item.name, item.description) for item in status.scenarios
     )
     action = (
         f'<a class="button" href="{escape(target, quote=True)}">进入会话</a>'
@@ -467,11 +467,11 @@ def _render_status(status: BotStatus, target: str | None) -> str:
   <h1>alicedev</h1>
   <section class="state {state_class}"><strong>bot 状态：{state}</strong>{error}</section>
   <p>运行代数：<code>{status.generation}</code> · 运行时间：<code>{status.uptime_s}</code> 秒</p>
-  <p>平台：{platforms} · 活跃会话：{status.active_sessions} · 已关闭：{status.closed_sessions}</p>
+  <p>平台：{platforms} · 进行中会话：{status.active_sessions} · 排队：{status.queued_sessions}</p>
   <h2>可用指令</h2>
   {commands}
-  <h2>Prompt 模板</h2>
-  {templates}
+  <h2>场景</h2>
+  {scenarios}
   <p>{action}</p>
 </body>
 </html>
