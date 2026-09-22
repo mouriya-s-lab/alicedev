@@ -68,6 +68,20 @@ RUN set -eux; \
       '!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'; \
     git config --system --add safe.directory '*'
 
+# Python toolchain for agents working on the alicedev repo: `python -m alicedev.dsl
+# check|card` and `pytest bot/tests` need the bot's dependencies.
+COPY bot/requirements.txt /tmp/alicedev-requirements.txt
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends python3-venv python3-pip; \
+    python3 -m venv /opt/alicedev/pyenv; \
+    /opt/alicedev/pyenv/bin/pip install --no-cache-dir -r /tmp/alicedev-requirements.txt pytest python-frontmatter; \
+    ln -sf /opt/alicedev/pyenv/bin/python /usr/local/bin/alicedev-python; \
+    ln -sf /opt/alicedev/pyenv/bin/pytest /usr/local/bin/pytest; \
+    rm -f /tmp/alicedev-requirements.txt; \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH=/opt/alicedev/pyenv/bin:$PATH
+
 COPY --from=harness /src/harness/dist/omp-extension/ /opt/alicedev/omp-extension/
 COPY --from=harness /src/harness/dist/reply-cli/alicedev-reply /opt/alicedev/reply-cli/alicedev-reply
 COPY deploy/paseo/entrypoint-hook.sh /usr/local/bin/alicedev-paseo-entrypoint
