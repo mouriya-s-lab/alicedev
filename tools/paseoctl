@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Run the paseo CLI inside the paseo container (ARCHITECTURE §4).
+
+    paseoctl [--container alicedev-paseo] [--docker docker] [--local] -- <paseo args...>
+
+The bot's PaseoControl uses the same invocation (``docker exec -i --user paseo
+<container> paseo <args>``). This shim exists for operators and tests; it adds
+``--json`` when the caller did not choose an output format, passes stdout and
+stderr through unchanged and returns paseo's exit code. ``--local`` runs a
+paseo binary on PATH instead of going through docker (for tests).
+"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+
+_OUTPUT_FLAGS = {"--json", "--format", "-o", "-q", "--quiet", "--help", "-h"}
+
+
+def build_argv(args: argparse.Namespace, paseo_args: list[str]) -> list[str]:
+    if not any(flag in _OUTPUT_FLAGS or flag.startswith("--format=") for flag in paseo_args):
+        paseo_args = [*paseo_args, "--json"]
+    if args.local:
+        return [args.paseo, *paseo_args]
+    return [args.docker, "exec", "-i", "--user", "paseo", args.container, args.paseo, *paseo_args]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="paseoctl", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--container", default="alicedev-paseo")
+    parser.add_argument("--docker", default="docker")
+    parser.add_argument("--paseo", default="paseo")
+    parser.add_argument("--local", action="store_true")
+    parser.add_argument("paseo_args", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    paseo_args = args.paseo_args[1:] if args.paseo_args[:1] == ["--"] else args.paseo_args
+    if not paseo_args:
+        parser.error("missing paseo command")
+    try:
+        return subprocess.run(build_argv(args, paseo_args), check=False).returncode
+    except OSError as exc:
+        print(f"paseoctl: cannot execute: {exc}", file=sys.stderr)
+        return 127
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

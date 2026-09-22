@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# AstrBot is kept at the version used by the dev harness. The candidate
-# plugin and templates are mounted by Compose from the checkout at run time;
-# this keeps every run fresh instead of baking a stale candidate into the
-# image. Dependencies are installed below from the candidate requirements.
-FROM soulter/astrbot:v4.28.1
+# Same pinned AstrBot image as production (deploy/astrbot/Dockerfile) so
+# before/after runs exercise the production runtime. The plugin and templates
+# are mounted from the e2e checkout at run time, never baked in; the baseline
+# plugin requirements are pre-installed here and AstrBot installs any new
+# requirement of a candidate when it (re)loads the plugin.
+ARG ASTRBOT_IMAGE=soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf
+FROM ${ASTRBOT_IMAGE}
 
 USER root
 

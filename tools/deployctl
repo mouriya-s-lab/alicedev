@@ -1,182 +1,392 @@
 #!/usr/bin/env python3
-"""Deploy or roll back one bot checkout and verify the running AstrBot.
+"""Own the host alicedev checkout that AstrBot mounts (ARCHITECTURE §11).
 
-The target is deliberately mandatory.  A target is an existing git checkout
-whose parent contains ``deploy/docker-compose.yml`` and ``deploy/.env``.  The
-compose project is addressed from that parent, so this shim never discovers or
-implicitly selects another checkout.
+The checkout (``/srv/alicedev/app`` on the host, ``/deploy/app`` inside the
+paseo container) holds ``bot/`` and ``templates/``; AstrBot mounts both. A
+deployment moves that checkout to one commit and hot-reloads the plugin; the
+running revision is proven by the bot's ``/v1/health`` ``revision`` field,
+which the plugin reads from the untracked ``bot/REVISION`` file written here.
+
+Subcommands (all print exactly one JSON object on stdout; errors go to stderr):
+
+  bootstrap --app DIR --repo-url URL --commit SHA
+      Clone the repository into an absent/empty DIR and check out SHA.
+  status --app DIR
+      Report HEAD, REVISION and the bot's health.
+  apply --app DIR --commit SHA [--source REPO]
+      Fetch SHA, check it out, write REVISION, activate, verify.
+  rollback --app DIR --to SHA [--source REPO]
+      Same as apply, but prefers AstrBot's failed-plugin reload route.
+  run --app DIR --commit SHA [--source REPO]
+      apply; on failure roll back to the previous HEAD.
+      outcome: active | rolled_back | deploy_failed (exit 0 only for active).
+
+Activation (``--activate``):
+  reload   POST <astrbot-api>/api/v1/plugins/<plugin>/reload with X-API-Key
+           (env ASTRBOT_API_KEY). A plugin that failed to load is reloaded via
+           /api/v1/plugins/failed/<plugin>/reload instead.
+  restart  ``docker restart <container>`` (used by the e2e stack).
+  auto     (default) restart when bot/requirements.txt changed between the old
+           and new HEAD (new dependencies need AstrBot's install step), else reload.
+
+GitHub credentials come from env GITHUB_TOKEN through a temporary GIT_ASKPASS
+helper; the token never appears in argv or output.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import stat
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-_RUNNING_PLUGIN_DIR = "/AstrBot/data/plugins/alicedev"
-_HEALTH_COMMAND = (
-    "import urllib.request; "
-    "print(urllib.request.urlopen('http://127.0.0.1:6200/v1/health', timeout=3).status)"
-)
+REVISION_FILE = Path("bot") / "REVISION"
+REQUIREMENTS = "bot/requirements.txt"
+DEFAULT_ASTRBOT_API = "http://astrbot:6185"
+DEFAULT_BOT_API = "http://astrbot:6200"
+DEFAULT_CONTAINER = "alicedev-astrbot"
+DEFAULT_PLUGIN = "alicedev"
 
 
 class DeployError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class Target:
+    app: Path
+    source: str
+    activate: str
+    astrbot_api: str
+    bot_api: str
+    container: str
+    plugin: str
+    docker: str
+    timeout: float
+
+
+# --- process helpers ---------------------------------------------------------
+
+
+def _askpass_env() -> tuple[dict[str, str], Path | None]:
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    if not env.get("GITHUB_TOKEN"):
+        return env, None
+    handle, name = tempfile.mkstemp(prefix="deployctl-askpass-")
+    path = Path(name)
+    with os.fdopen(handle, "w") as stream:
+        stream.write(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            '  Username*) printf "%s\\n" x-access-token ;;\n'
+            '  *) printf "%s\\n" "$GITHUB_TOKEN" ;;\n'
+            "esac\n"
+        )
+    path.chmod(stat.S_IRWXU)
+    env["GIT_ASKPASS"] = str(path)
+    return env, path
+
+
+def _run(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> str:
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise DeployError(f"cannot execute {argv[0]}: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[-800:]
+        raise DeployError(f"{' '.join(argv[:3])} failed ({result.returncode}): {detail}")
+    return result.stdout.strip()
+
+
+def _git(app: Path, *args: str, network: bool = False) -> str:
+    if not network:
+        return _run(["git", "-C", str(app), *args])
+    env, helper = _askpass_env()
+    try:
+        return _run(["git", "-C", str(app), *args], env=env)
+    finally:
+        if helper is not None:
+            helper.unlink(missing_ok=True)
+
+
+# --- http helpers --------------------------------------------------------------
+
+
+def _http_json(method: str, url: str, *, headers: dict[str, str] | None = None,
+               body: dict[str, Any] | None = None, timeout: float = 10) -> tuple[int, Any]:
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(url, data=data, method=method)
+    request.add_header("Accept", "application/json")
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            status = response.status
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        status = exc.code
+    except (urllib.error.URLError, OSError) as exc:
+        raise DeployError(f"{method} {url} unreachable: {exc}") from exc
+    try:
+        return status, json.loads(raw.decode() or "null")
+    except ValueError:
+        return status, raw.decode(errors="replace")[:500]
+
+
+def _health(target: Target) -> dict[str, Any] | None:
+    try:
+        status, body = _http_json("GET", f"{target.bot_api}/v1/health", timeout=3)
+    except DeployError:
+        return None
+    return body if status == 200 and isinstance(body, dict) else None
+
+
+def _status_errors(target: Target) -> list[Any] | None:
+    token = os.environ.get("ALICEDEV_INTERNAL_TOKEN")
+    if not token:
+        return None
+    try:
+        status, body = _http_json(
+            "GET", f"{target.bot_api}/v1/status", headers={"X-Alicedev-Token": token}, timeout=5
+        )
+    except DeployError:
+        return None
+    if status != 200 or not isinstance(body, dict):
+        return None
+    errors = body.get("dsl_errors")
+    return errors if isinstance(errors, list) else None
+
+
+# --- activation ----------------------------------------------------------------
+
+
+def _container_started_at(target: Target) -> str:
+    return _run([target.docker, "inspect", "-f", "{{.State.StartedAt}}", target.container])
+
+
+def _reload(target: Target, *, failed_first: bool) -> str:
+    key = os.environ.get("ASTRBOT_API_KEY", "")
+    if not key:
+        raise DeployError("ASTRBOT_API_KEY is not set; cannot hot-reload the plugin")
+    headers = {"X-API-Key": key}
+    routes = [
+        f"{target.astrbot_api}/api/v1/plugins/failed/{target.plugin}/reload",
+        f"{target.astrbot_api}/api/v1/plugins/{target.plugin}/reload",
+    ]
+    if not failed_first:
+        routes.reverse()
+    last = ""
+    for url in routes:
+        status, body = _http_json("POST", url, headers=headers, body={}, timeout=120)
+        if status == 200 and not (isinstance(body, dict) and body.get("status") == "error"):
+            return url
+        last = f"{url} -> {status} {str(body)[:300]}"
+    raise DeployError(f"plugin reload rejected: {last}")
+
+
+def _activate(target: Target, mode: str, *, failed_first: bool) -> dict[str, Any]:
+    if mode == "restart":
+        before = _container_started_at(target)
+        _run([target.docker, "restart", target.container])
+        return {"mode": "restart", "started_before": before}
+    route = _reload(target, failed_first=failed_first)
+    return {"mode": "reload", "route": route}
+
+
+def _verify(target: Target, commit: str, activation: dict[str, Any], prev_generation: Any) -> dict[str, Any]:
+    deadline = time.monotonic() + target.timeout
+    last: Any = None
+    while time.monotonic() < deadline:
+        health = _health(target)
+        last = health
+        if health and health.get("revision") == commit:
+            fresh = (
+                _container_started_at(target) != activation.get("started_before")
+                if activation["mode"] == "restart"
+                else health.get("generation") != prev_generation
+            )
+            if fresh:
+                errors = _status_errors(target)
+                if errors:
+                    raise DeployError(f"running revision reports dsl_errors: {errors[:5]}")
+                return {"health": health, "dsl_errors": errors}
+        time.sleep(2)
+    raise DeployError(f"running revision did not become {commit}: last health {last}")
+
+
+# --- checkout operations ---------------------------------------------------------
+
+
+def _resolve(target: Target, ref: str) -> str:
+    _git(target.app, "fetch", "--quiet", target.source, ref, network=True)
+    return _git(target.app, "rev-parse", "--verify", f"{ref}^{{commit}}")
+
+
+def _head(app: Path) -> str:
+    return _git(app, "rev-parse", "HEAD")
+
+
+def _requirements_changed(app: Path, old: str, new: str) -> bool:
+    return bool(_git(app, "diff", "--name-only", old, new, "--", REQUIREMENTS))
+
+
+def _switch(target: Target, commit: str) -> None:
+    _git(target.app, "checkout", "--quiet", "--detach", commit)
+    (target.app / REVISION_FILE).write_text(commit + "\n", encoding="utf-8")
+
+
+def _deploy(target: Target, ref: str, *, failed_first: bool) -> dict[str, Any]:
+    if not (target.app / ".git").exists():
+        raise DeployError(f"not a git checkout: {target.app}")
+    previous = _head(target.app)
+    commit = _resolve(target, ref)
+    prev_health = _health(target) or {}
+    mode = target.activate
+    if mode == "auto":
+        mode = "restart" if _requirements_changed(target.app, previous, commit) else "reload"
+    _switch(target, commit)
+    activation = _activate(target, mode, failed_first=failed_first)
+    verified = _verify(target, commit, activation, prev_health.get("generation"))
+    return {"previous": previous, "commit": commit, "activation": activation, **verified}
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
+    app: Path = args.app
+    if app.exists() and any(app.iterdir()):
+        raise DeployError(f"refusing to bootstrap into a non-empty directory: {app}")
+    app.mkdir(parents=True, exist_ok=True)
+    env, helper = _askpass_env()
+    try:
+        _run(["git", "clone", "--quiet", args.repo_url, str(app)], env=env)
+    finally:
+        if helper is not None:
+            helper.unlink(missing_ok=True)
+    _git(app, "checkout", "--quiet", "--detach", args.commit)
+    commit = _head(app)
+    (app / REVISION_FILE).write_text(commit + "\n", encoding="utf-8")
+    return {"operation": "bootstrap", "app": str(app), "commit": commit}
+
+
+def cmd_status(target: Target) -> dict[str, Any]:
+    revision_path = target.app / REVISION_FILE
+    return {
+        "operation": "status",
+        "app": str(target.app),
+        "head": _head(target.app),
+        "revision_file": revision_path.read_text().strip() if revision_path.exists() else None,
+        "health": _health(target),
+    }
+
+
+def cmd_apply(target: Target, ref: str) -> dict[str, Any]:
+    return {"operation": "apply", "status": "active", **_deploy(target, ref, failed_first=False)}
+
+
+def cmd_rollback(target: Target, ref: str) -> dict[str, Any]:
+    return {"operation": "rollback", "status": "active", **_deploy(target, ref, failed_first=True)}
+
+
+def cmd_run(target: Target, ref: str) -> tuple[dict[str, Any], int]:
+    previous = _head(target.app)
+    try:
+        applied = _deploy(target, ref, failed_first=False)
+        return {"operation": "run", "outcome": "active", **applied}, 0
+    except DeployError as apply_error:
+        try:
+            rolled = _deploy(target, previous, failed_first=True)
+            return {
+                "operation": "run", "outcome": "rolled_back", "previous": previous,
+                "error": str(apply_error), "rollback": rolled,
+            }, 1
+        except DeployError as rollback_error:
+            return {
+                "operation": "run", "outcome": "deploy_failed", "previous": previous,
+                "error": str(apply_error), "rollback_error": str(rollback_error),
+            }, 1
+
+
+# --- CLI -------------------------------------------------------------------------
+
+
+def _target_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--app", type=Path, required=True, metavar="<dir>")
+    parser.add_argument("--source", default="origin", metavar="<remote-or-path>")
+    parser.add_argument("--activate", choices=("auto", "reload", "restart"), default="auto")
+    parser.add_argument("--astrbot-api", default=os.environ.get("ASTRBOT_API_BASE", DEFAULT_ASTRBOT_API))
+    parser.add_argument("--bot-api", default=os.environ.get("ALICEDEV_BOT_API_BASE", DEFAULT_BOT_API))
+    parser.add_argument("--container", default=DEFAULT_CONTAINER)
+    parser.add_argument("--plugin", default=DEFAULT_PLUGIN)
+    parser.add_argument("--docker", default="docker")
+    parser.add_argument("--timeout", type=float, default=180.0)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="deployctl")
+    parser = argparse.ArgumentParser(prog="deployctl", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-
-    apply = commands.add_parser("apply", help="checkout and activate one candidate commit")
-    apply.add_argument("--commit", required=True, metavar="<sha>")
-    apply.add_argument("--target", required=True, type=Path, metavar="<botdir>")
-
-    rollback = commands.add_parser("rollback", help="checkout and activate a previous commit")
-    rollback.add_argument("--to", required=True, metavar="<sha>")
-    rollback.add_argument("--target", required=True, type=Path, metavar="<botdir>")
+    boot = commands.add_parser("bootstrap")
+    boot.add_argument("--app", type=Path, required=True)
+    boot.add_argument("--repo-url", required=True)
+    boot.add_argument("--commit", required=True)
+    status = commands.add_parser("status")
+    _target_args(status)
+    for name, flag in (("apply", "--commit"), ("rollback", "--to"), ("run", "--commit")):
+        sub = commands.add_parser(name)
+        _target_args(sub)
+        sub.add_argument(flag, dest="ref", required=True, metavar="<sha>")
     return parser
 
 
-def _run(
-    command: list[str],
-    *,
-    cwd: Path | None = None,
-    capture: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    try:
-        result = subprocess.run(
-            command,
-            cwd=str(cwd) if cwd is not None else None,
-            text=True,
-            check=False,
-            capture_output=capture,
-        )
-    except OSError as exc:
-        raise DeployError(f"cannot execute {command[0]}: {exc}") from exc
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        suffix = f": {detail}" if detail else ""
-        raise DeployError(f"command failed ({result.returncode}): {' '.join(command)}{suffix}")
-    return result
-
-
-def _resolve_target(raw: Path) -> Path:
-    try:
-        target = raw.expanduser().resolve(strict=True)
-    except OSError as exc:
-        raise DeployError(f"target is not accessible: {raw}: {exc}") from exc
-    if not target.is_dir():
-        raise DeployError(f"target is not a directory: {target}")
-    return target
-
-
-def _resolve_commit(target: Path, requested: str) -> str:
-    if not requested.strip():
-        raise DeployError("commit must not be empty")
-    result = _run(
-        ["git", "-C", str(target), "rev-parse", "--verify", f"{requested}^{{commit}}"],
-        capture=True,
+def _target(args: argparse.Namespace) -> Target:
+    return Target(
+        app=args.app.resolve(), source=args.source, activate=args.activate,
+        astrbot_api=args.astrbot_api.rstrip("/"), bot_api=args.bot_api.rstrip("/"),
+        container=args.container, plugin=args.plugin, docker=args.docker, timeout=args.timeout,
     )
-    resolved = (result.stdout or "").strip()
-    if not resolved:
-        raise DeployError(f"commit does not resolve in target: {requested}")
-    return resolved.splitlines()[-1].strip()
-
-
-def _verify_git_checkout(target: Path) -> None:
-    result = _run(["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"], capture=True)
-    if (result.stdout or "").strip() != "true":
-        raise DeployError(f"target is not a git worktree: {target}")
-
-
-def _compose_args(project_root: Path, *tail: str) -> tuple[list[str], Path]:
-    compose_file = project_root / "deploy" / "docker-compose.yml"
-    env_file = project_root / "deploy" / ".env"
-    if not compose_file.is_file():
-        raise DeployError(f"compose file missing: {compose_file}")
-    if not env_file.is_file():
-        raise DeployError(f"compose env file missing: {env_file}")
-    return (
-        [
-            "docker",
-            "compose",
-            "-f",
-            "deploy/docker-compose.yml",
-            "--env-file",
-            "deploy/.env",
-            *tail,
-        ],
-        project_root,
-    )
-
-
-def _checkout_and_restart(requested: str, raw_target: Path, operation: str) -> dict[str, str]:
-    target = _resolve_target(raw_target)
-    project_root = target.parent
-    _verify_git_checkout(target)
-    resolved = _resolve_commit(target, requested)
-
-    # A normal checkout is intentional: a dirty target fails closed instead of
-    # silently destroying operator changes.  The target is detached so the
-    # running source is exactly the requested commit, not a moving branch.
-    _run(["git", "-C", str(target), "checkout", "--detach", resolved])
-    checked_out = (
-        _run(["git", "-C", str(target), "rev-parse", "HEAD"], capture=True).stdout or ""
-    ).strip()
-    if checked_out != resolved:
-        raise DeployError(f"checkout verification failed: expected {resolved}, got {checked_out}")
-
-    restart, cwd = _compose_args(project_root, "restart", "astrbot")
-    _run(restart, cwd=cwd)
-
-    running_cmd, cwd = _compose_args(
-        project_root,
-        "exec",
-        "-T",
-        "astrbot",
-        "git",
-        "-C",
-        _RUNNING_PLUGIN_DIR,
-        "rev-parse",
-        "HEAD",
-    )
-    running_result = _run(running_cmd, cwd=cwd, capture=True)
-    lines = [line.strip() for line in (running_result.stdout or "").splitlines() if line.strip()]
-    running = next((line for line in reversed(lines) if line == resolved), lines[-1] if lines else "")
-    if running != resolved:
-        raise DeployError(f"running SHA verification failed: expected {resolved}, got {running or '<empty>'}")
-
-    harmless, cwd = _compose_args(project_root, "exec", "-T", "astrbot", "python3", "-c", _HEALTH_COMMAND)
-    # Capture the health probe's stdout so its "200" status line never leaks
-    # into deployctl's own machine-readable JSON stdout (deployrun parses it).
-    _run(harmless, cwd=cwd, capture=True)
-
-    return {
-        "operation": operation,
-        "target": str(target),
-        "commit": resolved,
-        "running_sha": running,
-        "status": "active",
-    }
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    code = 0
     try:
-        if args.command == "apply":
-            result = _checkout_and_restart(args.commit, args.target, "apply")
-        elif args.command == "rollback":
-            result = _checkout_and_restart(args.to, args.target, "rollback")
-        else:
-            raise DeployError(f"unsupported command: {args.command}")
-    except (DeployError, OSError) as exc:
-        print(f"deployctl: {exc}", file=sys.stderr)
+        match args.command:
+            case "bootstrap":
+                result = cmd_bootstrap(args)
+            case "status":
+                result = cmd_status(_target(args))
+            case "apply":
+                result = cmd_apply(_target(args), args.ref)
+            case "rollback":
+                result = cmd_rollback(_target(args), args.ref)
+            case "run":
+                result, code = cmd_run(_target(args), args.ref)
+            case other:
+                raise DeployError(f"unknown command {other}")
+    except DeployError as exc:
+        print(json.dumps({"operation": args.command, "status": "error", "error": str(exc)}), file=sys.stderr)
         return 1
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0
+    print(json.dumps(result, ensure_ascii=False))
+    return code
 
 
 if __name__ == "__main__":

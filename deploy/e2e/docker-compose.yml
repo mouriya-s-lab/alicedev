@@ -1,3 +1,16 @@
+# Resident e2e stack (ARCHITECTURE §11). Always up; never taken down with the
+# `deploy` project. Its AstrBot mounts bot/ and templates/ from a dedicated
+# checkout (host /srv/alicedev/e2e-src, paseo /deploy/e2e-src); agents move that
+# checkout between the running production SHA and a candidate SHA with
+# tools/e2e_driver.py, which restarts this AstrBot and t2i before each side.
+#
+# Network: joins the `alicedev-e2e` internal network created by the deploy
+# project — no egress, no published ports, no production QQ/TG/paseo
+# credentials. Only paseo agents (agent-browser) reach its WebChat.
+#
+# Run from the host checkout:
+#   docker compose -f /srv/alicedev/app/deploy/e2e/docker-compose.yml \
+#     --env-file /srv/alicedev/deploy/.env up -d --build
 name: alicedev-e2e
 
 services:
@@ -6,21 +19,19 @@ services:
       context: ../..
       dockerfile: deploy/e2e/Dockerfile
     image: alicedev/e2e:local
+    platform: linux/amd64
     container_name: alicedev-e2e-astrbot
     restart: unless-stopped
     init: true
     environment:
       TZ: Asia/Shanghai
-      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${E2E_DASHBOARD_PASSWORD:-E2e-Local-Password9}
-    ports:
-      - "127.0.0.1:0:6185"
-      - "127.0.0.1:0:6200"
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${E2E_DASHBOARD_PASSWORD:?set E2E_DASHBOARD_PASSWORD}
+    expose: ["6185", "6200"]
     volumes:
       - e2e_astrbot_data:/AstrBot/data
-      - ../../bot:/AstrBot/data/plugins/alicedev:ro
-      - ../../templates:/AstrBot/alicedev-templates:ro
-    networks:
-      - e2e
+      - ${E2E_SRC_DIR:-../../../e2e-src}/bot:/AstrBot/data/plugins/alicedev:ro
+      - ${E2E_SRC_DIR:-../../../e2e-src}/templates:/AstrBot/alicedev-templates:ro
+    networks: [e2e]
     depends_on:
       t2i:
         condition: service_healthy
@@ -43,10 +54,8 @@ services:
     platform: linux/amd64
     container_name: alicedev-e2e-t2i
     restart: unless-stopped
-    expose:
-      - "8999"
-    networks:
-      - e2e
+    expose: ["8999"]
+    networks: [e2e]
     healthcheck:
       test:
         - CMD
@@ -63,7 +72,9 @@ services:
 
 networks:
   e2e:
-    name: alicedev-e2e-network
+    name: alicedev-e2e
+    external: true
 
 volumes:
   e2e_astrbot_data:
+    name: alicedev_e2e_astrbot_data

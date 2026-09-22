@@ -1,0 +1,27 @@
+{
+  "$schema": "https://paseo.sh/schemas/paseo.config.v1.json",
+  "version": 1,
+  "daemon": {
+    "listen": "0.0.0.0:6767",
+    "hostnames": ["localhost"],
+    "mcp": {
+      "enabled": false
+    },
+    "relay": {
+      "enabled": false
+    }
+  },
+  "agents": {
+    "providers": {
+      "omp": {
+        "enabled": true
+      },
+      "omp-alicedev": {
+        "enabled": true,
+        "extends": "omp",
+        "label": "omp + alicedev",
+        "command": ["omp", "-e", "/opt/alicedev/omp-extension"]
+      }
+    }
+  }
+}

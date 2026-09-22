@@ -3,9 +3,15 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-usage: mainsync align --repo <fixed-main-repository>
+usage: mainsync align --repo <fixed-main-repository> [--container <name>]
 
 Align an alignment-only fixed-main checkout to origin/main by fast-forward only.
+
+Without --container the git commands run locally (inside the paseo container,
+or in tests). With --container they run as the paseo user inside that
+container via `docker exec` (the fixed-main lives in the paseo /workspace
+volume); GitHub credentials come from the container's own git credential
+helper and GITHUB_TOKEN environment.
 EOF
 }
 
@@ -14,67 +20,75 @@ fail_sync() {
   exit 1
 }
 
-if [[ ${1:-} != align || ${2:-} != --repo || $# -ne 3 ]]; then
-  usage
-  exit 2
-fi
+[[ ${1:-} == align ]] || { usage; exit 2; }
+shift
+repo=
+container=
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --repo) [[ $# -ge 2 ]] || { usage; exit 2; }; repo=$2; shift 2 ;;
+    --container) [[ $# -ge 2 ]] || { usage; exit 2; }; container=$2; shift 2 ;;
+    *) usage; exit 2 ;;
+  esac
+done
+[[ -n $repo ]] || { usage; exit 2; }
 
-repo=$3
+g() {
+  if [[ -n $container ]]; then
+    docker exec -i --user paseo "$container" git -C "$repo" "$@"
+  else
+    git -C "$repo" "$@"
+  fi
+}
 
 # Every check below is deliberately fail-closed. This command is the only
 # operation allowed to mutate the fixed-main checkout after bootstrap.
-if [[ ! -d $repo ]]; then
+if ! g rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   fail_sync
 fi
 
-if ! git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if [[ $(g rev-parse --is-bare-repository 2>/dev/null || printf true) != false ]]; then
   fail_sync
 fi
 
-if [[ $(git -C "$repo" rev-parse --is-bare-repository 2>/dev/null || printf true) != false ]]; then
+if [[ $(g symbolic-ref --quiet --short HEAD 2>/dev/null || true) != main ]]; then
   fail_sync
 fi
 
-if [[ $(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null || true) != main ]]; then
+if [[ $(g remote get-url origin 2>/dev/null || true) == '' ]]; then
   fail_sync
 fi
 
-if [[ $(git -C "$repo" remote get-url origin 2>/dev/null || true) == '' ]]; then
-  fail_sync
-fi
-
-if [[ $(git -C "$repo" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true) != origin/main ]]; then
+if [[ $(g rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true) != origin/main ]]; then
   fail_sync
 fi
 
 # status --porcelain includes staged, unstaged, and untracked files. A merge
 # or rebase in progress is rejected explicitly even if its status output is
 # unexpectedly abbreviated by a Git version.
-if [[ -n $(git -C "$repo" status --porcelain=v1 --untracked-files=all 2>/dev/null) ]]; then
+if [[ -n $(g status --porcelain=v1 --untracked-files=all 2>/dev/null) ]]; then
   fail_sync
 fi
-if git -C "$repo" rev-parse --verify --quiet MERGE_HEAD >/dev/null ||
-  git -C "$repo" rev-parse --verify --quiet REBASE_HEAD >/dev/null; then
+if g rev-parse --verify --quiet MERGE_HEAD >/dev/null ||
+  g rev-parse --verify --quiet REBASE_HEAD >/dev/null; then
   fail_sync
 fi
 
-if ! git -C "$repo" fetch --prune origin main >/dev/null 2>&1; then
+if ! g fetch --prune origin main >/dev/null 2>&1; then
   fail_sync
 fi
 
 # A fast-forward-only merge accepts an already-ahead local branch as
 # "Already up to date". Reject that case (and divergence) before merging: the
 # fixed-main branch must never carry commits that are not on origin/main.
-merge_base=$(git -C "$repo" merge-base HEAD origin/main 2>/dev/null || true)
-head=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)
+merge_base=$(g merge-base HEAD origin/main 2>/dev/null || true)
+head=$(g rev-parse HEAD 2>/dev/null || true)
 if [[ -z $merge_base || $merge_base != "$head" ]]; then
   fail_sync
 fi
 
-if ! git -C "$repo" merge --ff-only origin/main >/dev/null 2>&1; then
+if ! g merge --ff-only origin/main >/dev/null 2>&1; then
   fail_sync
 fi
 
-# Keep the machine-visible success output intentionally small; callers can
-# inspect HEAD/origin/main when they need the aligned commit.
-printf '%s\n' "aligned $(git -C "$repo" rev-parse HEAD)"
+printf '%s\n' "aligned $(g rev-parse HEAD)"

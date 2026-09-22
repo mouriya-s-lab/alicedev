@@ -1,3 +1,7 @@
+# Resident Telegram client for agents (tools/tgctl → docker exec). Separate
+# project with its own default network (egress to Telegram); never taken down
+# with `deploy`. Login: deploy/tg-cli/qr-login.py in the container, approved by
+# an authorized operator session with tools/tg-approve-login (see tools/README.md).
 name: alicedev-tg-cli
 
 services:

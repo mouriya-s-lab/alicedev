@@ -1,15 +1,24 @@
+# Build contexts and bind mounts come from two host checkouts that sit next to
+# this deploy/ directory (ARCHITECTURE §11):
+#   ../app        alicedev checkout owned by tools/deployctl (bot/, templates/,
+#                 Dockerfiles, harness sources). Override with ALICEDEV_APP_DIR
+#                 (e.g. `..` when running from a developer checkout).
+#   ../src/paseo  unmodified upstream paseo source (mouriya-s-lab/paseo at
+#                 PASEO_SRC_REF), used only to build the paseo base image.
 services:
-  # Build-only service. `make build` builds this first, then the child image below.
+  # Build-only service: upstream paseo, unmodified, built from its own
+  # docker/base/Dockerfile. SELFHOSTED=true makes the bundled web UI use the
+  # gateway's self-hosted manifest (/_paseo/hosts.json). `make build` builds
+  # this first, then the alicedev child image below.
   paseo-base:
     platform: linux/amd64
-    image: alicedev/paseo-arch:local
+    image: alicedev/paseo-base:local
     profiles: [build]
     build:
-      context: ${PASEO_REPO_CONTEXT:-../../paseo-alicedev}
-      dockerfile: docker/arch/Dockerfile
+      context: ${PASEO_SRC_CONTEXT:-../src/paseo}
+      dockerfile: docker/base/Dockerfile
       args:
         PASEO_VERSION: ${PASEO_VERSION:-0.8.0}
-        OMP_VERSION: ${OMP_VERSION:-18.2.5}
         EXPO_PUBLIC_PASEO_SELFHOSTED: "true"
         EXPO_PUBLIC_LOCAL_DAEMON: self-hosted
 
@@ -73,7 +82,7 @@ services:
     container_name: alicedev-gateway
     restart: unless-stopped
     build:
-      context: ..
+      context: ${ALICEDEV_APP_DIR:-../app}
       dockerfile: gateway/Dockerfile
     environment:
       GATEWAY_SECRET: ${GATEWAY_SECRET:?set GATEWAY_SECRET}
@@ -107,8 +116,11 @@ services:
       start_period: 20s
 
   astrbot:
-    image: soulter/astrbot:latest@sha256:8e9f108c1470e6dd46bbbaad0d01e93d740dd86ee8d1cd767a10106aefd62ecf
+    # Pinned upstream AstrBot + static docker CLI (deploy/astrbot/Dockerfile).
+    image: alicedev/astrbot:local
     platform: linux/amd64
+    build:
+      context: ${ALICEDEV_APP_DIR:-../app}/deploy/astrbot
     container_name: alicedev-astrbot
     restart: unless-stopped
     init: true
@@ -121,9 +133,13 @@ services:
       - "${PANEL_BIND_IP:-127.0.0.1}:6185:6185"
     volumes:
       - astrbot_data:/AstrBot/data
-      - ../bot:/AstrBot/data/plugins/alicedev
-      - ../templates:/AstrBot/alicedev-templates
+      # bot/ and templates/ come from the deployctl-owned checkout; a deploy
+      # moves the checkout and hot-reloads the plugin (no restart).
+      - ${ALICEDEV_APP_DIR:-../app}/bot:/AstrBot/data/plugins/alicedev
+      - ${ALICEDEV_APP_DIR:-../app}/templates:/AstrBot/alicedev-templates
       - reports:/srv/alicedev/reports
+      # The plugin reaches the paseo daemon only via `docker exec alicedev-paseo paseo … --json`.
+      - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal, edge]   # edge = egress for Telegram API / GitHub / t2i is internal
     depends_on:
       t2i:
@@ -228,10 +244,12 @@ services:
     container_name: alicedev-paseo
     restart: unless-stopped
     build:
-      context: ..
+      context: ${ALICEDEV_APP_DIR:-../app}
       dockerfile: deploy/paseo/Dockerfile
       args:
-        PASEO_ARCH_IMAGE: alicedev/paseo-arch:local
+        PASEO_BASE_IMAGE: alicedev/paseo-base:local
+        OMP_VERSION: ${OMP_VERSION:-18.2.5}
+        DOCKER_GID: ${DOCKER_GID:-989}
     environment:
       PASEO_PASSWORD: ${PASEO_PASSWORD:?set PASEO_PASSWORD}
       ALICEDEV_INTERNAL_API: http://astrbot:6200
@@ -242,12 +260,26 @@ services:
       PASEO_WEB_UI_ENABLED: "true"
       # omp inside paseo reads this key for the opencode-go provider.
       OPENCODE_API_KEY: ${OPENCODE_API_KEY:?}
+      # Agents: git/gh (issue → PR, fixed-main fetch, deploy fetch). The image's
+      # git credential helper reads GITHUB_TOKEN at call time.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?set GITHUB_TOKEN}
+      GH_TOKEN: ${GITHUB_TOKEN:?set GITHUB_TOKEN}
+      # deployrun (deploying state): AstrBot plugin hot reload, scope `plugin`.
+      ASTRBOT_API_KEY: ${ASTRBOT_API_KEY:?set ASTRBOT_API_KEY}
+      # e2e_driver: WebChat login on the resident e2e stack.
+      E2E_DASHBOARD_PASSWORD: ${E2E_DASHBOARD_PASSWORD:?set E2E_DASHBOARD_PASSWORD}
     expose: ["6767"]
     volumes:
       - paseo_home:/home/paseo
       - workspace:/workspace
       - reports:/srv/alicedev/reports
-    networks: [internal, edge]   # edge = egress for the model provider API and git clones
+      # Host checkouts: the production bot/templates (deployrun) and the e2e stack source.
+      - ${ALICEDEV_APP_DIR:-../app}:/deploy/app
+      - ${E2E_SRC_DIR:-../e2e-src}:/deploy/e2e-src
+      # Agents reach e2e / tg-cli / astrbot (restart) through docker exec.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # edge = egress for the model provider API and git; e2e = the resident e2e stack's WebChat.
+    networks: [internal, edge, e2e]
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:6767/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval: 30s
@@ -260,6 +292,12 @@ networks:
     name: alicedev-edge
   internal:
     name: alicedev
+    internal: true
+  # Owned here, joined by the separate e2e project (deploy/e2e) as external.
+  # Internal: the e2e stack has no egress and publishes no ports; only paseo
+  # agents (e2e_driver + agent-browser) reach its WebChat.
+  e2e:
+    name: alicedev-e2e
     internal: true
 
 volumes:

@@ -14,6 +14,7 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check \
     && mkdir -p /data
 
 COPY photo.py /opt/alicedev/tg-photo.py
+COPY qr-login.py /opt/alicedev/tg-qr-login.py
 
 RUN cp "$(command -v tg)" /usr/local/bin/tg-cli
 

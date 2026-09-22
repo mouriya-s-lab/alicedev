@@ -11,6 +11,8 @@ dist/
 # deploy
 deploy/.env
 deploy/astrbot/*.rendered.json
+# running revision marker written by tools/deployctl into the host checkout
+bot/REVISION
 
 # dev stack runtime + local secrets
 deploy/dev/astrbot-data/
