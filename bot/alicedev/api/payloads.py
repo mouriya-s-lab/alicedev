@@ -47,6 +47,13 @@ class StickerReply:
 
 
 @dataclass(frozen=True)
+class ImageReply:
+    paths: tuple[str, ...]
+    caption: str | None = None
+    kind: str = "image"
+
+
+@dataclass(frozen=True)
 class FileReply:
     path: str
     caption: str | None = None
@@ -54,8 +61,14 @@ class FileReply:
 
 
 ReplyPayload = Union[
-    TextReply, TextTemplateReply, ImageTemplateReply, StickerReply, FileReply
+    TextReply, TextTemplateReply, ImageTemplateReply, ImageReply, StickerReply, FileReply
 ]
+
+
+@dataclass(frozen=True)
+class Transition:
+    state: str
+    data: Mapping[str, str]
 
 
 def parse_reply_payload(raw: Any) -> ReplyPayload:
@@ -85,10 +98,31 @@ def parse_reply_payload(raw: Any) -> ReplyPayload:
             )
         case "sticker":
             return StickerReply(sticker=_req_str(raw, "sticker"))
+        case "image":
+            paths = raw.get("paths")
+            if not isinstance(paths, list) or not paths or not all(
+                isinstance(p, str) and p for p in paths
+            ):
+                raise InvalidPayload("image.paths must be a non-empty list of strings")
+            return ImageReply(paths=tuple(paths), caption=_opt_str(raw, "caption"))
         case "file":
             return FileReply(path=_req_str(raw, "path"), caption=_opt_str(raw, "caption"))
         case _:
             raise InvalidPayload(f"unknown reply kind: {kind!r}")
+
+
+def parse_transition(raw: Any) -> Transition:
+    if not isinstance(raw, Mapping):
+        raise InvalidPayload("transition must be an object")
+    state = raw.get("state")
+    if not isinstance(state, str) or not state:
+        raise InvalidPayload("transition.state must be a non-empty string")
+    data = raw.get("data")
+    if data is None:
+        data = {}
+    if not isinstance(data, Mapping):
+        raise InvalidPayload("transition.data must be an object")
+    return Transition(state=state, data={str(k): str(v) for k, v in data.items()})
 
 
 def payload_digest(raw: Any) -> str:

@@ -1,96 +1,75 @@
-"""sessions table repository and its domain types."""
+"""User-visible sessions (ARCHITECTURE §2, §10) and the per-chat current pointer."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from enum import Enum
-from typing import TYPE_CHECKING
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Mapping
+
+from alicedev.domain import SessionView
+from alicedev.render.pagination import DEFAULT_PAGE_SIZE
 
 if TYPE_CHECKING:
     from alicedev.store.db import Store
 
-
-MAX_SESSION_NAME_LENGTH = 60
-
-
-class SessionStatus(str, Enum):
-    CREATING = "creating"
-    ACTIVE = "active"
-    CLOSED = "closed"
-    FAILED = "failed"
-    ARCHIVED = "archived"
+NAME_LIMIT = 60
 
 
-def normalize_session_name_segment(value: str | None) -> str:
-    """Return the first non-empty line with stable whitespace normalization."""
-    if value is not None:
-        for line in str(value).splitlines():
-            normalized = " ".join(line.split())
-            if normalized:
-                return normalized
-    return "未命名"
+def bounded_session_name(text: str, limit: int = NAME_LIMIT) -> str:
+    body = " ".join(str(text).split()).strip() or "未命名会话"
+    return body if len(body) <= limit else body[: limit - 1] + "…"
 
 
-def bounded_session_name(prefix: str, value: str | None) -> str:
-    """Build a display name bounded to the contract's codepoint limit."""
-    segment = normalize_session_name_segment(value)
-    available = MAX_SESSION_NAME_LENGTH - len(prefix)
-    if available <= 0:
-        return prefix[:MAX_SESSION_NAME_LENGTH]
-    return f"{prefix}{segment[:available].rstrip()}"
-
-def _utc_naive(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-def _utc_now_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-@dataclass
-class SessionRecord:
-    session_ref: str
+@dataclass(frozen=True)
+class SessionRow:
+    session_id: int
     chat_key: str
-    template: str
+    no: int
+    scenario: str
     name: str
-    status: SessionStatus
     created_by: str
-    provider: str | None = None
-    model: str | None = None
-    thinking: str | None = None
-    agent_id: str | None = None
-    workspace_id: str | None = None
-    server_id: str | None = None
-    created_at: datetime | None = None
-    last_activity_at: datetime | None = None
+    input: Mapping[str, Any]
+    state: str
+    workspace_id: str | None
+    worktree_path: str | None
+    base_sha: str | None
+    data: Mapping[str, Any]
+    created_at: datetime
+    updated_at: datetime
 
 
 _COLUMNS = (
-    "session_ref, chat_key, template, name, provider, model, thinking, agent_id, "
-    "workspace_id, server_id, status, created_by, created_at, last_activity_at"
+    "session_id, chat_key, no, scenario, name, created_by, input, state, workspace_id, "
+    "worktree_path, base_sha, data, created_at, updated_at"
 )
-_QUALIFIED_COLUMNS = ", ".join(f"s.{column.strip()}" for column in _COLUMNS.split(","))
 
 
-def _row_to_record(row: tuple) -> SessionRecord:
-    return SessionRecord(
-        session_ref=row[0],
-        chat_key=row[1],
-        template=row[2],
-        name=row[3],
-        provider=row[4],
-        model=row[5],
-        thinking=row[6],
-        agent_id=row[7],
+def _json(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        loaded = json.loads(value) if value.strip() else {}
+        return loaded if isinstance(loaded, dict) else {}
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _row(row: tuple) -> SessionRow:
+    return SessionRow(
+        session_id=int(row[0]),
+        chat_key=str(row[1]),
+        no=int(row[2]),
+        scenario=str(row[3]),
+        name=str(row[4]),
+        created_by=str(row[5]),
+        input=_json(row[6]),
+        state=str(row[7]),
         workspace_id=row[8],
-        server_id=row[9],
-        status=SessionStatus(row[10]),
-        created_by=row[11],
+        worktree_path=row[9],
+        base_sha=row[10],
+        data=_json(row[11]),
         created_at=row[12],
-        last_activity_at=row[13],
+        updated_at=row[13],
     )
 
 
@@ -98,135 +77,185 @@ class SessionsRepo:
     def __init__(self, store: "Store") -> None:
         self._store = store
 
-    async def create_creating(
+    async def create(
         self,
         *,
-        session_ref: str,
         chat_key: str,
-        template: str,
+        scenario: str,
         name: str,
         created_by: str,
-        provider: str | None,
-        model: str | None,
-        thinking: str | None,
-    ) -> None:
-        created_at = _utc_now_naive()
+        input: Mapping[str, Any],
+        state: str,
+    ) -> SessionRow:
+        """Allocate the next per-chat number and insert (caller holds store.lock)."""
+        session_id = await self._store.next_id("seq_sessions")
+        row = await self._store.fetch_one(
+            "SELECT COALESCE(MAX(no), 0) + 1 FROM sessions WHERE chat_key = ?", (chat_key,)
+        )
+        no = int(row[0]) if row else 1
         await self._store.execute(
-            "INSERT INTO sessions (session_ref, chat_key, template, name, provider, "
-            "model, thinking, status, created_by, created_at, last_activity_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (session_id, chat_key, no, scenario, name, created_by, "
+            "input, state, data) VALUES (?,?,?,?,?,?,?,?,?)",
             (
-                session_ref,
-                chat_key,
-                template,
-                name,
-                provider,
-                model,
-                thinking,
-                SessionStatus.CREATING.value,
-                created_by,
-                created_at,
-                created_at,
+                session_id, chat_key, no, scenario, bounded_session_name(name), created_by,
+                json.dumps(dict(input), ensure_ascii=False, default=str), state, "{}",
             ),
         )
+        created = await self.get(session_id)
+        assert created is not None
+        return created
 
-    async def get(self, session_ref: str) -> SessionRecord | None:
+    async def get(self, session_id: int) -> SessionRow | None:
         row = await self._store.fetch_one(
-            f"SELECT {_COLUMNS} FROM sessions WHERE session_ref = ?", (session_ref,)
+            f"SELECT {_COLUMNS} FROM sessions WHERE session_id = ?", (session_id,)
         )
-        return _row_to_record(row) if row else None
+        return _row(row) if row else None
 
-    async def set_active(
+    async def by_no(self, chat_key: str, no: int) -> SessionRow | None:
+        row = await self._store.fetch_one(
+            f"SELECT {_COLUMNS} FROM sessions WHERE chat_key = ? AND no = ?", (chat_key, no)
+        )
+        return _row(row) if row else None
+
+    async def set_state(self, session_id: int, state: str) -> None:
+        await self._store.execute(
+            "UPDATE sessions SET state = ?, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') "
+            "WHERE session_id = ?",
+            (state, session_id),
+        )
+
+    async def merge_data(self, session_id: int, data: Mapping[str, Any]) -> None:
+        current = await self.get(session_id)
+        merged = dict(current.data if current else {})
+        merged.update(data)
+        await self._store.execute(
+            "UPDATE sessions SET data = ? WHERE session_id = ?",
+            (json.dumps(merged, ensure_ascii=False), session_id),
+        )
+
+    async def set_workspace(
         self,
-        session_ref: str,
+        session_id: int,
         *,
-        agent_id: str,
         workspace_id: str | None,
-        server_id: str | None,
-        provider: str | None = None,
-        model: str | None = None,
-        thinking: str | None = None,
+        worktree_path: str | None = None,
+        base_sha: str | None = None,
     ) -> None:
         await self._store.execute(
-            "UPDATE sessions SET status = ?, agent_id = ?, workspace_id = ?, "
-            "server_id = ?, provider = COALESCE(?, provider), "
-            "model = COALESCE(?, model), thinking = COALESCE(?, thinking) "
-            "WHERE session_ref = ?",
-            (SessionStatus.ACTIVE.value, agent_id, workspace_id, server_id,
-             provider, model, thinking, session_ref),
+            "UPDATE sessions SET workspace_id = ?, worktree_path = COALESCE(?, worktree_path), "
+            "base_sha = COALESCE(?, base_sha) WHERE session_id = ?",
+            (workspace_id, worktree_path, base_sha, session_id),
         )
 
-    async def set_status(self, session_ref: str, status: SessionStatus) -> None:
+    async def rename(self, session_id: int, name: str) -> None:
         await self._store.execute(
-            "UPDATE sessions SET status = ? WHERE session_ref = ?",
-            (status.value, session_ref),
+            "UPDATE sessions SET name = ?, updated_at = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC') "
+            "WHERE session_id = ?",
+            (bounded_session_name(name), session_id),
         )
 
-    async def touch(self, session_ref: str, when: datetime | None = None) -> None:
-        """Advance last_activity_at to max(current, when)."""
-        ts = _utc_now_naive() if when is None else _utc_naive(when)
-        await self._store.execute(
-            "UPDATE sessions SET last_activity_at = GREATEST(last_activity_at, ?) "
-            "WHERE session_ref = ?",
-            (ts, session_ref),
-        )
+    # --- current pointer ------------------------------------------------
 
-
-    async def current_for_chat(self, chat_key: str) -> SessionRecord | None:
-        """Return the explicitly selected session for ``chat_key`` only."""
+    async def current(self, chat_key: str) -> SessionRow | None:
         row = await self._store.fetch_one(
-            f"SELECT {_QUALIFIED_COLUMNS} "
-            "FROM chat_current_sessions AS c "
-            "JOIN sessions AS s "
-            "ON s.session_ref = c.current_session_ref AND s.chat_key = c.chat_key "
-            "WHERE c.chat_key = ? AND s.status IN (?, ?)",
-            (chat_key, SessionStatus.ACTIVE.value, SessionStatus.CLOSED.value),
+            f"SELECT {', '.join('s.' + c.strip() for c in _COLUMNS.split(','))} "
+            "FROM chat_current_sessions AS c JOIN sessions AS s ON s.session_id = c.session_id "
+            "WHERE c.chat_key = ?",
+            (chat_key,),
         )
-        return _row_to_record(row) if row else None
+        return _row(row) if row else None
 
-    async def set_current(self, chat_key: str, session_ref: str) -> None:
-        """Select an active or closed session belonging to ``chat_key``."""
+    async def set_current(self, chat_key: str, session_id: int) -> None:
         await self._store.execute(
-            "INSERT INTO chat_current_sessions "
-            "(chat_key, current_session_ref, updated_at) "
-            "SELECT ?, session_ref, ? FROM sessions "
-            "WHERE session_ref = ? AND chat_key = ? AND status IN (?, ?) "
-            "ON CONFLICT (chat_key) DO UPDATE SET "
-            "current_session_ref = excluded.current_session_ref, "
+            "INSERT INTO chat_current_sessions (chat_key, session_id, updated_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP AT TIME ZONE 'UTC') "
+            "ON CONFLICT (chat_key) DO UPDATE SET session_id = excluded.session_id, "
             "updated_at = excluded.updated_at",
-            (
-                chat_key,
-                _utc_now_naive(),
-                session_ref,
-                chat_key,
-                SessionStatus.ACTIVE.value,
-                SessionStatus.CLOSED.value,
-            ),
+            (chat_key, session_id),
         )
 
-    async def clear_current(self, chat_key: str, expected_ref: str | None = None) -> None:
-        if expected_ref is None:
-            await self._store.execute(
-                "DELETE FROM chat_current_sessions WHERE chat_key = ?", (chat_key,)
-            )
-            return
+    async def clear_current_if(self, chat_key: str, session_id: int) -> None:
         await self._store.execute(
-            "DELETE FROM chat_current_sessions "
-            "WHERE chat_key = ? AND current_session_ref = ?",
-            (chat_key, expected_ref),
+            "DELETE FROM chat_current_sessions WHERE chat_key = ? AND session_id = ?",
+            (chat_key, session_id),
         )
 
+    # --- queries -------------------------------------------------------------
 
-    async def idle_active(self, older_than: datetime) -> list[SessionRecord]:
-        cutoff = _utc_naive(older_than)
+    async def in_states(self, states: tuple[str, ...]) -> list[SessionRow]:
+        if not states:
+            return []
+        marks = ",".join("?" for _ in states)
         rows = await self._store.fetch_all(
-            f"SELECT {_COLUMNS} FROM sessions WHERE status = ? AND last_activity_at < ?",
-            (SessionStatus.ACTIVE.value, cutoff),
+            f"SELECT {_COLUMNS} FROM sessions WHERE state IN ({marks}) ORDER BY session_id",
+            states,
         )
-        return [_row_to_record(r) for r in rows]
+        return [_row(r) for r in rows]
 
-    async def counts(self) -> dict[str, int]:
+    async def not_in_states(self, states: tuple[str, ...]) -> list[SessionRow]:
+        marks = ",".join("?" for _ in states) or "''"
         rows = await self._store.fetch_all(
-            "SELECT status, COUNT(*) FROM sessions GROUP BY status"
+            f"SELECT {_COLUMNS} FROM sessions WHERE state NOT IN ({marks}) ORDER BY session_id",
+            states,
         )
-        return {status: int(n) for status, n in rows}
+        return [_row(r) for r in rows]
+
+    async def page(
+        self,
+        chat_key: str,
+        *,
+        page: int,
+        scenario: str | None,
+        include_ended: bool,
+        ended_states: tuple[str, ...],
+        page_size: int = DEFAULT_PAGE_SIZE,
+    ) -> tuple[list[SessionRow], int]:
+        where = ["chat_key = ?"]
+        params: list[Any] = [chat_key]
+        if scenario:
+            where.append("scenario = ?")
+            params.append(scenario)
+        if not include_ended and ended_states:
+            where.append(f"state NOT IN ({','.join('?' for _ in ended_states)})")
+            params.extend(ended_states)
+        clause = " AND ".join(where)
+        total_row = await self._store.fetch_one(f"SELECT COUNT(*) FROM sessions WHERE {clause}", params)
+        total = int(total_row[0]) if total_row else 0
+        rows = await self._store.fetch_all(
+            f"SELECT {_COLUMNS} FROM sessions WHERE {clause} ORDER BY no DESC LIMIT ? OFFSET ?",
+            [*params, page_size, max(0, page - 1) * page_size],
+        )
+        return [_row(r) for r in rows], total
+
+    async def last_activity(self, session_id: int) -> datetime | None:
+        row = await self._store.fetch_one(
+            "SELECT MAX(last_activity_at) FROM agents WHERE session_id = ?", (session_id,)
+        )
+        return row[0] if row else None
+
+    async def counts(self, ended_states: tuple[str, ...]) -> dict[str, int]:
+        marks = ",".join("?" for _ in ended_states) or "''"
+        active = await self._store.fetch_one(
+            f"SELECT COUNT(*) FROM sessions WHERE state NOT IN ({marks}) AND state <> 'queued'",
+            ended_states,
+        )
+        queued = await self._store.fetch_one("SELECT COUNT(*) FROM sessions WHERE state = 'queued'")
+        return {"active": int(active[0]) if active else 0, "queued": int(queued[0]) if queued else 0}
+
+    async def view(self, row: SessionRow) -> SessionView:
+        current = await self._store.fetch_one(
+            "SELECT 1 FROM chat_current_sessions WHERE chat_key = ? AND session_id = ?",
+            (row.chat_key, row.session_id),
+        )
+        return SessionView(
+            session_id=row.session_id,
+            chat_key=row.chat_key,
+            no=row.no,
+            name=row.name,
+            scenario=row.scenario,
+            state=row.state,
+            created_by=row.created_by,
+            created_at=row.created_at,
+            last_activity_at=await self.last_activity(row.session_id),
+            is_current=current is not None,
+        )

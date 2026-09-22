@@ -3,6 +3,7 @@
 The AstrBot dashboard writes ``data/config/alicedev_config.json`` from
 ``_conf_schema.json``; :meth:`PluginConfig.from_astrbot` parses that dict-like
 config into a frozen dataclass so no dict-shaped config leaks across modules.
+Scenario-level settings (provider, working directory) live in the DSL, not here.
 """
 
 from __future__ import annotations
@@ -26,8 +27,6 @@ def _as_tuple(value: Any) -> tuple[str, ...]:
 class PluginConfig:
     """Parsed, validated plugin configuration."""
 
-    paseo_url: str
-    paseo_password: str
     internal_token: str
     gateway_url: str
     public_base_url: str
@@ -36,20 +35,21 @@ class PluginConfig:
     images_root: Path
     stickers_root: Path
     data_dir: Path = Path("/AstrBot/data/plugin_data/alicedev")
+    plugin_dir: Path = Path("/AstrBot/data/plugins/alicedev")
     allowed_chats: tuple[str, ...] = ()
     admin_users: tuple[str, ...] = ()
     github_token: str | None = None
     default_repo: str = "TraderAlice/OpenAlice"
-    paseo_provider: str = "omp-alicedev"
-    paseo_model: str = ""
-    paseo_thinking: str = "high"
-    paseo_cwd: str = "/workspace/alicedev"
+    paseo_container: str = "alicedev-paseo"
+    paseo_bin: str = "paseo"
+    docker_bin: str = "docker"
     internal_api_host: str = "0.0.0.0"
     internal_api_port: int = 6200
     idle_close_seconds: int = 12 * 3600
     sweeper_interval_seconds: int = 600
     inject_wait_max_seconds: int = 600
     inject_poll_seconds: float = 2.0
+    share_ttl_seconds: int = 21600
 
     def is_admin(self, user_key: str) -> bool:
         return user_key in self.admin_users
@@ -61,15 +61,19 @@ class PluginConfig:
     def duckdb_path(self) -> Path:
         return self.data_dir / "alicedev.duckdb"
 
+    @property
+    def revision_path(self) -> Path:
+        return self.plugin_dir / "REVISION"
+
     @classmethod
-    def from_astrbot(cls, config: Mapping[str, Any], *, data_dir: Path) -> "PluginConfig":
+    def from_astrbot(
+        cls, config: Mapping[str, Any], *, data_dir: Path, plugin_dir: Path
+    ) -> "PluginConfig":
         """Build from AstrBot's ``AstrBotConfig`` (dict-like).
 
         ``data_dir`` is the plugin's runtime data directory under AstrBot's data
         root (``data/plugin_data/alicedev``); the DuckDB file and default image
-        root live there, never in the bind-mounted source tree. ``templates_root``
-        has no fallback — it comes from config (default ``/AstrBot/alicedev-templates``).
-        Every value is overridable through the dashboard config.
+        root live there, never in the bind-mounted source tree.
         """
 
         def get(key: str, default: Any = None) -> Any:
@@ -80,8 +84,6 @@ class PluginConfig:
 
         templates_root = Path(get("templates_root") or "/AstrBot/alicedev-templates")
         return cls(
-            paseo_url=str(get("paseo_url", "http://paseo:6767")),
-            paseo_password=str(get("paseo_password", "")),
             internal_token=str(get("internal_token", "")),
             gateway_url=str(get("gateway_url", "http://gateway:8080")),
             public_base_url=str(get("public_base_url", "")),
@@ -90,14 +92,14 @@ class PluginConfig:
             images_root=Path(get("images_root") or (data_dir / "images")),
             stickers_root=Path(get("stickers_root") or (templates_root / "stickers")),
             data_dir=data_dir,
+            plugin_dir=plugin_dir,
             allowed_chats=_as_tuple(get("allowed_chats")),
             admin_users=_as_tuple(get("admin_users")),
             github_token=(str(get("github_token")) or None) if get("github_token") else None,
             default_repo=str(get("default_repo", "TraderAlice/OpenAlice")),
-            paseo_provider=str(get("paseo_provider", "omp-alicedev")),
-            paseo_model=str(get("paseo_model", "")),
-            paseo_thinking=str(get("paseo_thinking", "high")),
-            paseo_cwd=str(get("paseo_cwd", "/workspace/alicedev")),
+            paseo_container=str(get("paseo_container") or "alicedev-paseo"),
+            paseo_bin=str(get("paseo_bin") or "paseo"),
+            docker_bin=str(get("docker_bin") or "docker"),
             internal_api_host=str(get("internal_api_host", "0.0.0.0")),
             internal_api_port=int(get("internal_api_port", 6200)),
             idle_close_seconds=int(get("idle_close_seconds", 12 * 3600)),

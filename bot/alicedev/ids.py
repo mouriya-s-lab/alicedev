@@ -11,8 +11,8 @@ def _base32(n_chars: int) -> str:
     return "".join(secrets.choice(_B32) for _ in range(n_chars))
 
 
-def new_session_ref() -> str:
-    return "s_" + _base32(10)
+def new_agent_ref() -> str:
+    return "a_" + _base32(10)
 
 
 def new_msg_ref() -> str:

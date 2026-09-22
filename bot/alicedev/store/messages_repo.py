@@ -1,103 +1,63 @@
-"""messages table repository."""
+"""Inbound messages injected into agents; also the redelivery dedupe key."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from alicedev.store.db import Store
 
 
-@dataclass
-class MessageRecord:
+@dataclass(frozen=True)
+class ClaimedMessage:
     msg_ref: str
-    session_ref: str
-    chat_key: str
-    platform_message_id: str | None
-    sender_key: str | None
-    text: str
-    created_at: datetime | None = None
-
-
-def _row_to_record(row: tuple) -> MessageRecord:
-    return MessageRecord(
-        msg_ref=row[0],
-        session_ref=row[1],
-        chat_key=row[2],
-        platform_message_id=row[3],
-        sender_key=row[4],
-        text=row[5],
-        created_at=row[6],
-    )
+    session_id: int | None
+    agent_ref: str | None
+    fresh: bool
 
 
 class MessagesRepo:
     def __init__(self, store: "Store") -> None:
         self._store = store
 
-    async def insert(
-        self,
-        *,
-        msg_ref: str,
-        session_ref: str,
-        chat_key: str,
-        platform_message_id: str | None,
-        sender_key: str | None,
-        text: str,
-    ) -> None:
-        await self._store.execute(
-            "INSERT INTO messages (msg_ref, session_ref, chat_key, "
-            "platform_message_id, sender_key, text) VALUES (?, ?, ?, ?, ?, ?)",
-            (msg_ref, session_ref, chat_key, platform_message_id, sender_key, text),
-        )
-
     async def claim(
         self,
         *,
         msg_ref: str,
-        session_ref: str,
         chat_key: str,
-        platform_message_id: str,
+        platform_message_id: str | None,
         sender_key: str | None,
         text: str,
-    ) -> MessageRecord:
-        """Atomically claim one inbound platform message.
-
-        ``(chat_key, platform_message_id)`` is the durable idempotency key.
-        The returned row is the winner, which lets callers reuse an existing
-        session without sending another Paseo turn.
-        """
+        session_id: int | None,
+        agent_ref: str | None,
+    ) -> ClaimedMessage:
+        """Insert unless ``(chat_key, platform_message_id)`` was already seen."""
+        if platform_message_id is not None:
+            existing = await self._store.fetch_one(
+                "SELECT msg_ref, session_id, agent_ref FROM messages "
+                "WHERE chat_key = ? AND platform_message_id = ?",
+                (chat_key, platform_message_id),
+            )
+            if existing is not None:
+                return ClaimedMessage(str(existing[0]), existing[1], existing[2], fresh=False)
         await self._store.execute(
-            "INSERT INTO messages (msg_ref, session_ref, chat_key, "
-            "platform_message_id, sender_key, text) VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT (chat_key, platform_message_id) DO NOTHING",
-            (msg_ref, session_ref, chat_key, platform_message_id, sender_key, text),
+            "INSERT INTO messages (msg_ref, agent_ref, chat_key, platform_message_id, sender_key, "
+            "text, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (msg_ref, agent_ref, chat_key, platform_message_id, sender_key, text, session_id),
         )
-        record = await self.find_by_platform_message(chat_key, platform_message_id)
-        if record is None:
-            raise RuntimeError("inbound message claim disappeared")
-        return record
+        return ClaimedMessage(msg_ref, session_id, agent_ref, fresh=True)
 
-    async def find_by_platform_message(
-        self, chat_key: str, platform_message_id: str
-    ) -> MessageRecord | None:
-        row = await self._store.fetch_one(
-            "SELECT msg_ref, session_ref, chat_key, platform_message_id, sender_key, "
-            "text, created_at FROM messages "
-            "WHERE chat_key = ? AND platform_message_id = ?",
-            (chat_key, platform_message_id),
-        )
-        return _row_to_record(row) if row else None
+    async def attach(self, msg_ref: str, *, agent_ref: str, text: str | None = None) -> None:
+        if text is None:
+            await self._store.execute(
+                "UPDATE messages SET agent_ref = ? WHERE msg_ref = ?", (agent_ref, msg_ref)
+            )
+        else:
+            await self._store.execute(
+                "UPDATE messages SET agent_ref = ?, text = ? WHERE msg_ref = ?",
+                (agent_ref, text, msg_ref),
+            )
 
     async def delete(self, msg_ref: str) -> None:
         await self._store.execute("DELETE FROM messages WHERE msg_ref = ?", (msg_ref,))
-
-    async def get(self, msg_ref: str) -> MessageRecord | None:
-        row = await self._store.fetch_one(
-            "SELECT msg_ref, session_ref, chat_key, platform_message_id, sender_key, "
-            "text, created_at FROM messages WHERE msg_ref = ?",
-            (msg_ref,),
-        )
-        return _row_to_record(row) if row else None

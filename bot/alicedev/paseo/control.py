@@ -1,7 +1,7 @@
-"""Contract B: the ``PaseoControl`` interface (ARCHITECTURE §4).
+"""bot → paseo control plane contract (ARCHITECTURE §4).
 
-Operation-level contract is fixed; the transport (MCP ``POST /mcp/agents`` or the
-daemon WebSocket ``/ws``) is chosen by the spike and selected at construction.
+The only transport is the paseo CLI inside the paseo container
+(:mod:`alicedev.paseo.cli`); this module holds the transport-free types.
 """
 
 from __future__ import annotations
@@ -9,6 +9,8 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass
 from enum import Enum
+
+LABEL_KEY = "alicedev"
 
 
 class AgentStatus(str, Enum):
@@ -26,11 +28,26 @@ class AgentStatus(str, Enum):
 
 @dataclass(frozen=True)
 class AgentHandle:
-    """Identity of a paseo agent as seen by the bridge."""
-
     agent_id: str
-    workspace_id: str | None = None
-    server_id: str | None = None
+    workspace_id: str | None
+    server_id: str | None
+
+
+@dataclass(frozen=True)
+class WorkspaceRef:
+    workspace_id: str
+    cwd: str
+
+
+@dataclass(frozen=True)
+class GitResult:
+    returncode: int
+    stdout: str
+    stderr: str
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0
 
 
 class PaseoError(RuntimeError):
@@ -38,115 +55,51 @@ class PaseoError(RuntimeError):
 
 
 class PaseoControl(abc.ABC):
-    """Transport-agnostic control operations for one paseo daemon."""
-
-    @abc.abstractmethod
-    async def connect(self) -> None:
-        """Establish the transport (idempotent)."""
-
-    @abc.abstractmethod
-    async def aclose(self) -> None:
-        """Tear down the transport."""
+    """Operations the bot performs on the paseo daemon (all via paseo CLI)."""
 
     @abc.abstractmethod
     async def create(
         self,
         *,
-        session_ref: str,
+        agent_ref: str,
         provider: str,
-        model: str,
-        thinking: str,
         cwd: str,
         title: str,
         initial_prompt: str,
+        workspace_id: str,
     ) -> AgentHandle:
-        """Create an agent whose first turn is ``initial_prompt``.
-
-        Spike verdict (§4): MCP ``create_agent`` requires ``initialPrompt``, so the
-        bridge passes the ``/chat_ingress`` command as the initial prompt; the omp
-        extension intercepts it before the model, keeping the msg id hidden.
-        """
+        """Start an agent (labelled ``alicedev=<agent_ref>``) with its first turn."""
 
     @abc.abstractmethod
-    async def find_by_label(self, session_ref: str) -> AgentHandle | None:
-        """Recover an agent by its ``alicedev=<session_ref>`` label."""
+    async def find_by_label(self, agent_ref: str) -> AgentHandle | None:
+        """Recover an agent created with ``alicedev=<agent_ref>``."""
 
     @abc.abstractmethod
-    async def send(self, agent_id: str, text: str) -> None:
-        """Send a user turn (the ingress command) to a live agent."""
+    async def send(self, agent_id: str, text: str) -> None: ...
 
     @abc.abstractmethod
-    async def status(self, agent_id: str) -> AgentStatus:
-        """Observe the agent's lifecycle/turn status."""
+    async def status(self, agent_id: str) -> AgentStatus: ...
 
     @abc.abstractmethod
     async def close(self, agent_id: str) -> None:
-        """Close the runtime while retaining a resumable record."""
+        """Stop the runtime; the agent stays resumable."""
 
     @abc.abstractmethod
-    async def archive(self, agent_id: str) -> None:
-        """Archive (soft delete) the agent."""
-
-
-LABEL_KEY = "alicedev"
-
-
-class WaitOutcome(str, Enum):
-    IDLE = "idle"
-    ERROR = "error"
-    PERMISSION = "permission"
-    TIMEOUT = "timeout"
-
-
-@dataclass(frozen=True)
-class WaitResult:
-    outcome: WaitOutcome
-    last_message: str | None
-    error: str | None
-
-
-@dataclass(frozen=True)
-class WorktreeRef:
-    workspace_id: str
-    cwd: str
-
-
-class DaemonControl(abc.ABC):
-    """WS /ws control plane for the ``/升级bot`` conductor."""
+    async def archive(self, agent_id: str) -> None: ...
 
     @abc.abstractmethod
-    async def connect(self) -> None:
-        """Establish the daemon WebSocket transport."""
+    async def workspace_local(self, path: str, title: str) -> WorkspaceRef:
+        """Register a non-isolated workspace on ``path`` (cwd scenarios, fixed-main)."""
 
     @abc.abstractmethod
-    async def aclose(self) -> None:
-        """Tear down the daemon WebSocket transport."""
+    async def worktree_create(self, *, repo: str, base_ref: str, slug: str) -> WorkspaceRef: ...
 
     @abc.abstractmethod
-    async def worktree_create(self, *, repo_path: str, base_ref: str, name: str) -> WorktreeRef:
-        """Create a worktree workspace from ``base_ref`` and return its identity."""
+    async def workspace_archive(self, workspace_id: str) -> None: ...
 
     @abc.abstractmethod
-    async def worktree_archive(self, workspace_id: str) -> None:
-        """Archive a worktree workspace."""
+    async def server_id(self) -> str | None: ...
 
     @abc.abstractmethod
-    async def agent_create(
-        self,
-        *,
-        workspace_id: str,
-        provider: str,
-        cwd: str,
-        title: str,
-        initial_prompt: str,
-        labels: dict[str, str],
-    ) -> str:
-        """Create an agent in ``workspace_id`` and return its ID."""
-
-    @abc.abstractmethod
-    async def agent_wait(self, agent_id: str, *, timeout_s: float) -> WaitResult:
-        """Wait for an agent turn to finish."""
-
-    @abc.abstractmethod
-    async def agent_status(self, agent_id: str) -> AgentStatus:
-        """Fetch the current status for an agent."""
+    async def git(self, repo: str, *args: str) -> GitResult:
+        """Run ``git -C <repo> <args>`` inside the paseo container as the paseo user."""

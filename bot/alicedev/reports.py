@@ -39,12 +39,26 @@ class PublishedFile:
     url: str | None
 
 
+def validate_under_root(path: str, root: Path) -> Path:
+    """Resolve ``path``; it must be a regular file under ``root`` with no symlinked segment."""
+    root = root.resolve()
+    real = Path(os.path.realpath(path))
+    try:
+        real.relative_to(root)
+    except ValueError:
+        raise ReportError("path_outside_root")
+    if not real.is_file() or not _is_regular(os.lstat(real).st_mode):
+        raise ReportError("file_not_regular")
+    _assert_no_symlink_segments(real, root)
+    return real
+
+
 class ReportPublisher:
     def __init__(self, *, store: "Store", config: "PluginConfig") -> None:
         self._store = store
         self._config = config
 
-    async def publish(self, path: str) -> PublishedFile:
+    async def publish(self, path: str, *, session_id: int | None = None) -> PublishedFile:
         root = self._config.reports_root.resolve()
         real = Path(os.path.realpath(path))
         # realpath is under REPORTS_ROOT
@@ -72,9 +86,9 @@ class ReportPublisher:
         _atomic_copy(real, dest)
 
         await self._store.execute(
-            "INSERT INTO reports (report_id, session_ref, source_path, published_path) "
+            "INSERT INTO reports (report_id, session_id, source_path, published_path) "
             "VALUES (?, ?, ?, ?)",
-            (report_id, None, str(real), str(dest)),
+            (report_id, session_id, str(real), str(dest)),
         )
 
         is_md = basename.lower().endswith(".md")
