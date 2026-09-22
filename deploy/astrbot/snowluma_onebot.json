@@ -1,0 +1,20 @@
+{
+  "networks": {
+    "httpServers": [],
+    "httpClients": [],
+    "wsServers": [],
+    "wsClients": [
+      {
+        "name": "astrbot-reverse",
+        "enabled": true,
+        "url": "ws://astrbot:6199",
+        "role": "Universal",
+        "accessToken": "${ONEBOT_ACCESS_TOKEN}",
+        "messageFormat": "array",
+        "reportSelfMessage": false,
+        "reconnectIntervalMs": 5000
+      }
+    ]
+  },
+  "musicSignUrl": ""
+}

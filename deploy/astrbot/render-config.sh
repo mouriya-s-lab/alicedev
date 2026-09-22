@@ -24,7 +24,7 @@ required = {
     "TELEGRAM_BOT_TOKEN",
     "PASEO_PASSWORD",
     "ALICEDEV_INTERNAL_TOKEN",
-    "NAPCAT_ONEBOT_TOKEN",
+    "ONEBOT_ACCESS_TOKEN",
 }
 found = set(pattern.findall(text))
 missing = sorted(name for name in required & found if not os.environ.get(name))
@@ -68,6 +68,7 @@ PY
 if [[ $# -eq 0 ]]; then
     render_one "$script_dir/cmd_config.json" "$script_dir/cmd_config.rendered.json"
     render_one "$script_dir/alicedev_config.json" "$script_dir/alicedev_config.rendered.json"
+    render_one "$script_dir/snowluma_onebot.json" "$script_dir/snowluma_onebot.rendered.json"
 elif [[ $# -eq 2 ]]; then
     render_one "$1" "$2"
 else
