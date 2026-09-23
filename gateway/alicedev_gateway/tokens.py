@@ -30,6 +30,7 @@ _REPORT_ID_PATTERN = re.compile(r"^r_[a-z2-7]{26}$")
 class TokenRecord:
     target: str
     user_key: str
+    session_id: int
     expires_at: float
 
 
@@ -68,6 +69,7 @@ class TokenTable:
         *,
         target: str,
         user_key: str,
+        session_id: int,
         ttl_s: int | float | None = None,
         now: float | None = None,
     ) -> IssuedToken:
@@ -75,6 +77,8 @@ class TokenTable:
             raise ValueError("target does not match the workspace URL contract")
         if not isinstance(user_key, str) or not user_key.strip():
             raise ValueError("user_key must be non-empty")
+        if isinstance(session_id, bool) or not isinstance(session_id, int) or session_id <= 0:
+            raise ValueError("session_id must be a positive integer")
 
         ttl = TOKEN_TTL_MAX if ttl_s is None else _coerce_ttl(ttl_s)
         issued_at = time.time() if now is None else now
@@ -82,7 +86,9 @@ class TokenTable:
         token = secrets.token_urlsafe(32)
         while token in self._records:
             token = secrets.token_urlsafe(32)
-        record = TokenRecord(target=target, user_key=user_key, expires_at=expires_at)
+        record = TokenRecord(
+            target=target, user_key=user_key, session_id=session_id, expires_at=expires_at
+        )
         self._records[token] = record
         return IssuedToken(
             token=token,

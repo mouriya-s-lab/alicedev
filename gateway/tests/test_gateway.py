@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import gzip
 from pathlib import Path
 import sys
+from urllib.parse import parse_qs, urlsplit
 import zlib
 
 from aiohttp import web
@@ -57,9 +60,22 @@ def _fake_upstream(seen: list[dict[str, str]]) -> web.Application:
             headers={"Content-Type": "application/javascript", "Content-Encoding": "gzip"},
         )
 
+    async def bot_session(request: web.Request) -> web.Response:
+        if request.headers.get("X-Alicedev-Token") != "internal" or request.match_info["id"] != "7":
+            return web.json_response({"error": "session_unknown"}, status=404)
+        return web.json_response({
+            "label": "%3", "name": "K 线缓存跨日失效 <调查>",
+            "scenario": {"name": "investigate", "description": "调查问题并给出结论"},
+            "state": {"name": "discussing", "label": "对话中"},
+            "created_by": "telegram:1", "created_at": "2026-09-23 04:10",
+            "last_activity_at": None, "is_current": True,
+        })
+
     app = web.Application()
     app.router.add_get("/h/srv/workspace/wks", document)
     app.router.add_get("/bundle.js", script)
+    # The same fake also answers the bot's session lookup (ARCHITECTURE §6).
+    app.router.add_get("/v1/sessions/{id}", bot_session)
     return app
 
 
@@ -72,7 +88,7 @@ async def _clients(tmp_path: Path) -> tuple[TestClient, TestServer, list[dict[st
         internal_token="internal",
         paseo_upstream=str(upstream.make_url("")).rstrip("/"),
         paseo_password="pw",
-        bot_upstream="http://127.0.0.1:9",
+        bot_upstream=str(upstream.make_url("")).rstrip("/"),
         public_host="localhost",
         reports_published_root=tmp_path,
     )
@@ -96,6 +112,19 @@ def _run(coro_fn, tmp_path: Path) -> None:
 def _authorized(client: TestClient) -> dict[str, str]:
     codec = client.app["cookie_codec"]
     return {"Cookie": f"{COOKIE_NAME}={codec.issue(user_key='telegram:1')}"}
+def _assert_themed_response(resp, body: str, *, status: int) -> None:
+    assert resp.status == status
+    assert resp.headers["Content-Type"].startswith("text/html; charset=utf-8")
+    assert "style-src 'self'" in resp.headers["Content-Security-Policy"]
+    assert "<style" not in body
+
+
+def _preview_script_hash() -> str:
+    script = 'document.getElementById("redeem").submit();'
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+    return f"sha256-{digest}"
+
+
 
 
 # --- pure helpers -------------------------------------------------------------
@@ -153,31 +182,132 @@ def test_public_static_and_reports_without_cookie(tmp_path: Path) -> None:
         assert boot.status == 200
         assert boot.headers["Content-Type"].startswith("application/javascript")
         assert "@paseo:daemon-registry" in await boot.text()
+
+        alice_css = await client.get("/_alicedev/static/alice/alice.css")
+        assert alice_css.status == 200
+        assert alice_css.headers["Content-Type"] == "text/css; charset=utf-8"
+        assert "--night: #0f0b12" in await alice_css.text()
+        illustration = await client.get("/_alicedev/static/alice/alice-torn.webp")
+        assert illustration.status == 200
+        assert illustration.headers["Content-Type"] == "image/webp"
+        font = await client.get("/_alicedev/static/alice/fell-sc.woff2")
+        assert font.status == 200
+        assert font.headers["Content-Type"] == "font/woff2"
+
+        for path in (
+            "/_alicedev/static/alice/nope.css",
+            "/_alicedev/static/alice/../app.py",
+        ):
+            missing_static = await client.get(path)
+            assert missing_static.status == 404
+            assert missing_static.headers["Content-Type"].startswith("text/plain")
+            assert "静态资源不存在" in await missing_static.text()
+
+        report_id = "r_" + "a" * 26
+        report_dir = tmp_path / report_id
+        report_dir.mkdir()
+        (report_dir / "readme.md").write_text("# Tea party\n\n```mermaid\nflowchart LR\nA-->B\n```\n")
+        report = await client.get(f"/_alicedev/r/{report_id}/readme.md")
+        report_body = await report.text()
+        assert report.status == 200
+        assert '<link rel="stylesheet" href="/_alicedev/static/alice/alice.css">' in report_body
+        assert 'class="report-frame__header"' in report_body
+        assert '<style>' in report_body
+        assert "mermaid.initialize" in report_body
+
         missing_report = await client.get("/_alicedev/r/r_aaaaaaaaaaaaaaaaaaaaaaaaaa/x.md")
-        assert missing_report.status == 404
+        missing_report_body = await missing_report.text()
+        _assert_themed_response(missing_report, missing_report_body, status=404)
+        assert "报告文件不存在" in missing_report_body
         bad_shape = await client.get("/_alicedev/r/whatever")
-        assert bad_shape.status == 404
+        bad_shape_body = await bad_shape.text()
+        _assert_themed_response(bad_shape, bad_shape_body, status=404)
+        assert "网关路径不存在" in bad_shape_body
+
         post = await client.post("/_alicedev/static/paseo-view.css")
         assert post.status == 405
         status_page = await client.get("/_alicedev/")
-        assert status_page.status == 403
+        status_body = await status_page.text()
+        _assert_themed_response(status_page, status_body, status=403)
+        assert "需要有效的 alicedev 分享授权" in status_body
         paseo = await client.get("/h/srv/workspace/wks", headers={"Accept": "text/html"})
-        assert paseo.status == 403
+        paseo_body = await paseo.text()
+        _assert_themed_response(paseo, paseo_body, status=403)
+        assert "需要有效的 alicedev 分享授权" in paseo_body
         assert seen == []
 
     _run(body, tmp_path)
 
 
-def test_status_page_accepts_bare_workspace_target(tmp_path: Path) -> None:
+def test_session_page_shows_only_session_details(tmp_path: Path) -> None:
     async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
         resp = await client.get(
-            "/_alicedev/?go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
+            "/_alicedev/?session=7&go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
         )
         text = await resp.text()
-        assert resp.status == 200
+        _assert_themed_response(resp, text, status=200)
         assert 'href="/h/srv/workspace/wks"' in text
+        assert "K 线缓存跨日失效 &lt;调查&gt;" in text and "ALICEDEV · %3" in text
+        assert "对话中" in text and "本群当前会话" in text and "调查问题并给出结论" in text
+        assert "指令" not in text
+
+        unknown = await client.get(
+            "/_alicedev/?session=8&go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
+        )
+        unknown_text = await unknown.text()
+        _assert_themed_response(unknown, unknown_text, status=200)
+        assert "会话信息暂时取不到" in unknown_text and 'href="/h/srv/workspace/wks"' in unknown_text
+
+        for query in ("?go=%2Fh%2Fsrv%2Fworkspace%2Fwks", "?session=7", "?session=x&go=%2Fsettings"):
+            bad = await client.get(f"/_alicedev/{query}", headers=_authorized(client))
+            _assert_themed_response(bad, await bad.text(), status=404)
 
     _run(body, tmp_path)
+
+
+def test_token_preview_and_consume_are_one_time(tmp_path: Path) -> None:
+    async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
+        del seen
+        no_session = await client.post(
+            "/internal/tokens",
+            headers={"X-Alicedev-Token": "internal"},
+            json={"target": "/h/srv/workspace/wks", "user_key": "telegram:1"},
+        )
+        assert no_session.status == 400
+        issued = await client.post(
+            "/internal/tokens",
+            headers={"X-Alicedev-Token": "internal"},
+            json={
+                "target": "/h/srv/workspace/wks",
+                "user_key": "telegram:1",
+                "session_id": 7,
+            },
+        )
+        assert issued.status == 200
+        token = (await issued.json())["token"]
+
+        preview = await client.get(f"/t/{token}")
+        preview_body = await preview.text()
+        _assert_themed_response(preview, preview_body, status=200)
+        assert '<form id="redeem" method="post" action="/t/' in preview_body
+        assert 'document.getElementById("redeem").submit();' in preview_body
+        assert _preview_script_hash() in preview.headers["Content-Security-Policy"]
+
+        first_post = await client.post(f"/t/{token}", allow_redirects=False)
+        assert first_post.status == 303
+        location = urlsplit(first_post.headers["Location"])
+        assert location.path == "/_alicedev/"
+        assert parse_qs(location.query) == {"session": ["7"], "go": ["/h/srv/workspace/wks"]}
+        assert "Set-Cookie" in first_post.headers
+
+        second_post = await client.post(f"/t/{token}", allow_redirects=False)
+        second_body = await second_post.text()
+        _assert_themed_response(second_post, second_body, status=403)
+        assert "链接无效、已使用或已过期" in second_body
+
+    _run(body, tmp_path)
+
+
 
 
 # --- share-view injection ---------------------------------------------------------------
@@ -256,5 +386,56 @@ def test_self_hosted_prefix_and_head_are_not_injected(tmp_path: Path) -> None:
         )
         assert resp.status == 200
         assert "Accept-Encoding" not in seen[-1] or seen[-1]["Accept-Encoding"] != "identity"
+
+    _run(body, tmp_path)
+
+
+def test_paseo_down_html_and_non_html(tmp_path: Path) -> None:
+    async def body() -> None:
+        config = GatewayConfig(
+            secret=b"test-secret",
+            internal_token="internal",
+            paseo_upstream="http://127.0.0.1:9",
+            paseo_password="pw",
+            bot_upstream="http://127.0.0.1:9",
+            public_host="localhost",
+            reports_published_root=tmp_path,
+        )
+        client = TestClient(TestServer(create_app(config)))
+        await client.start_server()
+        try:
+            html_resp = await client.get(
+                "/h/srv/workspace/wks",
+                headers={**_authorized(client), "Accept": "text/html"},
+            )
+            html_body = await html_resp.text()
+            _assert_themed_response(html_resp, html_body, status=502)
+            assert "paseo 上游暂时不可用" in html_body
+
+            js_resp = await client.get(
+                "/h/srv/workspace/wks",
+                headers={**_authorized(client), "Accept": "application/javascript"},
+            )
+            js_body = await js_resp.text()
+            assert js_resp.status == 502
+            assert not js_resp.headers["Content-Type"].startswith("text/html")
+            assert "paseo 上游暂时不可用" in js_body
+        finally:
+            await client.close()
+
+    asyncio.run(body())
+
+
+def test_unreadable_report_returns_themed_500(tmp_path: Path) -> None:
+    async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
+        del seen
+        report_id = "r_" + "b" * 26
+        report_dir = tmp_path / report_id
+        report_dir.mkdir()
+        (report_dir / "bad.md").write_bytes(b"\xff\xfe\x00invalid-utf8")
+        resp = await client.get(f"/_alicedev/r/{report_id}/bad.md")
+        body_text = await resp.text()
+        _assert_themed_response(resp, body_text, status=500)
+        assert "报告读取失败" in body_text
 
     _run(body, tmp_path)

@@ -14,6 +14,7 @@ import zlib
 from aiohttp import ClientError, ClientResponse, ClientSession, WSMsgType, web
 
 from .config import GatewayConfig
+from .pages import THEMED_HEADERS, ErrorPageKind, render_error_page
 
 
 _LOGGER = logging.getLogger("alicedev_gateway.proxy")
@@ -112,6 +113,15 @@ class PaseoProxy:
                 allow_redirects=False,
             )
         except (ClientError, asyncio.TimeoutError) as exc:
+            if _is_html_navigation(request):
+                _LOGGER.warning("paseo upstream unreachable for %s: %r", request.path, exc)
+                return web.Response(
+                    status=502,
+                    text=render_error_page(ErrorPageKind.PASEO_DOWN),
+                    content_type="text/html",
+                    charset="utf-8",
+                    headers=THEMED_HEADERS,
+                )
             raise web.HTTPBadGateway(text="paseo 上游暂时不可用") from exc
 
         if html_navigation and _is_injectable_html(upstream):

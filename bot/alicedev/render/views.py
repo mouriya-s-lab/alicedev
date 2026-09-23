@@ -229,6 +229,23 @@ def session_card(view: SessionView, scenario: Scenario | None) -> Card:
     return "session", fields
 
 
+def session_detail(view: SessionView, scenario: Scenario | None) -> dict[str, Any]:
+    """``GET /v1/sessions/{id}`` body for the gateway's session page (ARCHITECTURE §6/§8)."""
+    return {
+        "label": view.label,
+        "name": view.name,
+        "scenario": {
+            "name": scenario.name if scenario is not None else view.scenario,
+            "description": scenario.description if scenario is not None else "",
+        },
+        "state": {"name": view.state, "label": state_label(scenario, view.state)},
+        "created_by": view.created_by,
+        "created_at": _time(view.created_at),
+        "last_activity_at": _time(view.last_activity_at) or None,
+        "is_current": view.is_current,
+    }
+
+
 def session_list_card(
     rows: Sequence[SessionView],
     page: int,

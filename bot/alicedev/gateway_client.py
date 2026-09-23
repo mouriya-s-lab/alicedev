@@ -46,9 +46,10 @@ class GatewayClient:
         self,
         target: str,
         user_key: str,
+        session_id: int,
         ttl_s: int = _DEFAULT_TTL_S,
     ) -> IssuedToken:
-        """Register a target and return its one-time public URL."""
+        """Register a session's target and return its one-time public URL."""
 
         if not self._gateway_url:
             raise GatewayError("gateway URL is not configured")
@@ -62,7 +63,7 @@ class GatewayClient:
             "Content-Type": "application/json",
             "X-Alicedev-Token": self._internal_token,
         }
-        payload = {"target": target, "user_key": user_key, "ttl_s": ttl_s}
+        payload = {"target": target, "user_key": user_key, "session_id": session_id, "ttl_s": ttl_s}
         try:
             async with aiohttp.ClientSession(timeout=self._timeout) as session:
                 async with session.post(

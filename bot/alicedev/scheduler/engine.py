@@ -538,7 +538,8 @@ class Scheduler:
         if target is None:
             return None
         issued = await self._gateway.issue_token(
-            target=target, user_key=user_key, ttl_s=self._config.share_ttl_seconds
+            target=target, user_key=user_key, session_id=row.session_id,
+            ttl_s=self._config.share_ttl_seconds,
         )
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         async with self._store.lock:

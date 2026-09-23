@@ -173,8 +173,8 @@ class FakeGateway:
     def __init__(self) -> None:
         self.issued: list[dict[str, Any]] = []
 
-    async def issue_token(self, target: str, user_key: str, ttl_s: int = 21600) -> IssuedToken:
-        self.issued.append(dict(target=target, user_key=user_key))
+    async def issue_token(self, target: str, user_key: str, session_id: int, ttl_s: int = 21600) -> IssuedToken:
+        self.issued.append(dict(target=target, user_key=user_key, session_id=session_id))
         n = len(self.issued)
         return IssuedToken(token=f"t{n}", url=f"https://dev.example/t/t{n}")
 

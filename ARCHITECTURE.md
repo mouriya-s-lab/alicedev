@@ -40,7 +40,7 @@ flowchart LR
   qqproto -->|OneBot v11 reverse WS| astr
   caddy --> gw
   gw -->|cookie 校验后反代 http+ws<br/>注入分享视图样式| paseo
-  gw -->|GET /v1/status| astr
+  gw -->|GET /v1/sessions/{id}| astr
   astr -->|paseoctl → docker exec → paseo CLI --json| paseo
   paseo -->|agent 内 alicedev-reply → POST /v1/reply| astr
   astr -->|html_render| t2i
@@ -55,7 +55,7 @@ flowchart LR
 |---|---|---|
 | `astrbot` + 插件 `bot/` | Python 3.11 | **DSL**：加载与校验 `templates/`，按 DSL 分发指令与路由。**传输**：出站队列、渲染、内部 API、GitHub 预取、报告发布、收藏。**调度**：会话状态机、agent 生命周期（含 12h 空闲关闭）、当前会话指针。**可见性**：只放可见状态进聊天 |
 | `snowluma` | — | 个人 QQ 的协议端与 OneBot v11 reverse-WS 客户端；登录态与设备身份在命名卷 |
-| `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入与分享视图样式注入）、报告 md 渲染、状态页 |
+| `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入与分享视图样式注入）、报告 md 渲染、会话页 |
 | `paseo` | TS | **不可修改的已部署服务**，上游原样。agent 运行时 |
 | `harness/omp-extension` | TS | `/chat_ingress` 命令、`chat_reply` 工具、`session_stop` 提醒（§5） |
 | `harness/reply-cli` | TS（node 单文件，零依赖） | `alicedev-reply`：POST `/v1/reply`，带重试 |
@@ -331,6 +331,9 @@ POST /v1/reply { agent; reply_id; msgs: string[]; reply?: ReplyPayload; transiti
   → 404 { error: agent_unknown }
   → 409 { error: reply_id_conflict | agent_not_current }
 GET  /v1/agents/{agent} → { agent, session_no, chat_key, state, status, reply_spec }
+GET  /v1/sessions/{session_id} → 200 { label: "%n", name, scenario: { name, description }, state: { name, label },
+                                       created_by, created_at, last_activity_at | null, is_current }   // 网关会话页用；字段与会话卡同源，时间为 "YYYY-MM-DD HH:MM"
+  → 404 { error: session_unknown }
 GET  /v1/status → { ok, generation, uptime_s, platforms[], commands[], scenarios[], dsl_errors[],
                     sessions:{active, queued}, agents:{active, closed} }
 GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重连探测；revision = bot/REVISION（deployrun 写入），缺失为 "unknown"
@@ -370,15 +373,20 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重�
   返回 preview landing（`Cache-Control: no-store`、`Referrer-Policy: no-referrer`、
   `X-Robots-Tag: noindex`）。GET 页面用 JavaScript 自动向同一路径提交 `POST`，
   同时保留可见按钮 fallback；HEAD 只返回 headers，不消费 token。
+- `POST /internal/tokens`（bot → 网关，头 `X-Alicedev-Token`）：`{ target, user_key, session_id, ttl_s? }`，三者必填；`session_id` 随 token 存在内存表里。
 - `POST /t/<token>`：无 `await` 的单进程原子 consume；成功设 cookie
   `alicedev_s=<b64url(json{iat,exp,sub})>.<hmac-sha256>` 并返回 `303 See Other`
-  到 `/_alicedev/?go=<urlencoded target>`；`Path=/; Secure; HttpOnly; SameSite=Lax;
+  到 `/_alicedev/?session=<session_id>&go=<urlencoded target>`；`Path=/; Secure; HttpOnly; SameSite=Lax;
   Max-Age=2592000`；服务端校验 `exp`，常量时间比较 HMAC。无效/已消费/过期返回 403。
 - cookie 校验：除 `/t/*`、`/_alicedev/r/*`、`/_alicedev/static/*`、`/_alicedev/health` 外全部要求合法 cookie；失败 → 403 页面。
-- `/_alicedev/`：状态页（取 bot `/v1/status`），显示 bot 状态、指令、场景列表与「进入会话」按钮（`go`）。
+- `/_alicedev/?session=<id>&go=<target>`：会话页，只放和这个会话有关的信息：`%n` 与会话名（标题）、当前状态、场景及其说明、创建人、创建时间、最近活动、是否本群当前会话，外加「进入会话」按钮（`go`）。数据取 bot `GET /v1/sessions/{id}`；bot 不可达或会话不存在时，页面仍返回 200，写明「会话信息暂时取不到」，按钮照常可用。不显示 bot 运行状态、指令或场景列表。`session` 或 `go` 缺失、不合法 → 404 页面。
 - `/_alicedev/r/<report_id>/<basename>`：只读挂载 `REPORTS_ROOT/_published`；`report_id` 正则 `^r_[a-z2-7]{26}$`，`basename` 不含 `/`、`..`；`.md` → markdown-it-py（`html=False`）+ mdit-py-plugins（table、strikethrough、footnote、tasklists、deflist、front_matter、texmath）+ pygments；mermaid 客户端渲染（自带静态 js，`securityLevel:"strict"`）；其他扩展名白名单直出。响应头 `X-Robots-Tag: noindex`，`Referrer-Policy: no-referrer`；无目录列表。
 - 其余路径 → 反代 `http://paseo:6767`。HTTP：注入 `Authorization: Bearer $PASEO_PASSWORD`。WS（浏览器 ↔ paseo UI 的通道，与 bot 无关）：网关终止浏览器 WS（不转发浏览器的 `Sec-WebSocket-Protocol`/`Authorization`），另起上游 WS，带 `Authorization` + 子协议 `paseo.bearer.<pw>`，双向泵；不把上游子协议回显给浏览器。上游 `Host`=公共域名（paseo 需 `PASEO_HOSTNAMES` 含 `alicedev.237575.xyz`）；`Origin` 置为 `https://alicedev.237575.xyz` 或不发。
 - **分享视图**：分享链接打开的 paseo app 只保留右侧 agent 操作区（会话标签、对话、输入框），去掉左侧控制栏及其导航入口。网关对反代的每个 `text/html` 响应注入两样自带的静态资源（上游压缩的响应先解压再注入，并去掉 `Content-Length` 让其重算），不改 paseo 源码：`<head>` 开头的启动脚本 `/_alicedev/static/paseo-boot.js`，先于 paseo 的 bundle 执行；`</head>` 前的样式表 `/_alicedev/static/paseo-view.css`，只做隐藏。启动脚本让每次整页加载都成为一次干净的自托管启动，绕开 paseo 前端的两个问题：本地没有持久化 host 时，注册表在 `/_paseo/hosts.json` 探测完成前就标记为就绪，host 路由被重定向到 `/open-project`、深链丢失；本地已有持久化 host 时，启动会按 manifest 再探测同一连接，第二个连接挤掉第一个连接的订阅，时间线停在「Updating messages」。做法：删掉持久化的 host 注册表（host 全部来自 manifest）；遇到 host 路由时把工作区写成 paseo 的「上次活动工作区」并改写到 `/`，由 paseo 自己的启动恢复在 host 上线后进入该工作区，`?open=agent:<id>` 在这次跳转时补回。样式选择器、存储键名与路由形状都绑定当前部署的 paseo 版本，升级 paseo 时一并重新核对。这只是界面收敛，不是授权边界（见威胁模型）。分享目标：会话有 agent 时为最近一个 agent 的 `/h/<server>/workspace/<workspace>?open=agent%3A<agent>`；没有 agent 时为会话记录的 `workspace_id`（会话 worktree，或 `main_sync_failed` 时登记的 fixed-main，§4 `workspace_register`）。不带任何 paseo 私有参数。
+- **页面主题（Alice 黑童话）**：网关自己出的 HTML 页共用一套主题，人设取 Alice（BLACK SOULS）——哥特洛丽塔、怀表、荆棘玫瑰、扑克花色、撕碎的童话书页。人设只体现在视觉和少量口吻上，文案说的是会话、链接、报告这些产品里的东西，不用「仙境」「茶会」这类和产品无关的意象，也没有「工作室」一类的品牌名。范围：链接确认页（`GET /t/<token>`）、链接失效页（403：无效/已使用/已过期，提示回群发 `/链接`）、需要授权页（cookie 校验失败的 403）、找不到页（404：报告不存在、网关路径不存在）、报告读取失败页（500）、paseo 不可用页（反代连不上 paseo 的 502，只对浏览器文档导航出主题页；资源、XHR、WebSocket 失败仍是纯文本）、会话页 `/_alicedev/`、报告页外框（正文保持浅色羊皮纸阅读面，pygments/mermaid 不变）。状态码、消费语义、自动提交与按钮 fallback 都不变，只换正文。反代成功返回的 paseo 页面、`/internal/*` 与静态资源的错误、405 不在范围内（不是给人看的页面）。
+  - 资源只在 `gateway/static/alice/`，经 `/_alicedev/static/alice/<name>` 白名单下发，Content-Type 按扩展名给：`alice.css`（设计 token 与组件）、`alice-hero.webp`（确认页、会话页插画）、`alice-torn.webp`（所有错误页插画）、`alice-emblem.webp`（徽记）、`damask.webp`（底纹）、`alice-icon.png`（favicon）、IM Fell English 的 `fell-sc.woff2` `fell-italic.woff2` 及 `OFL-IMFell.txt`。中文字体用系统衬线栈，不自带。
+  - 除报告页外，主题页不含内联 `<style>`、不引用外部来源；CSP `default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`，确认页另加自动提交脚本的 `script-src 'sha256-…'`。
+  - token：`--night #0f0b12`、`--velvet #1b1320`、`--blood #7d1426`、`--rose #b8324a`、`--gilt #c8a45d`、`--parchment #f1e7d2`、`--ink #231a1f`。图片卡片（`templates/cards/`）目前没有采用这套主题；要不要推广由用户决定，推广时从 `alice.css` 取 token，插画走 data URI 或公开静态 URL。
 - `PASEO_PASSWORD` 必须非空（为空时 paseo daemon 不做鉴权）。
 - 访问日志脱敏：`/t/<token>` 记为 `/t/***`；不记录 cookie。
 
@@ -469,7 +477,7 @@ bot/                      AstrBot 插件（DSL · 传输 · 调度 · 可见性�
   alicedev/outbox/        出站队列：入队校验、outbox worker（§6）
   alicedev/store/         duckdb, schema.sql, repositories
   alicedev/render/        cards (html_render), pagination, cli.py（证据图 CLI）
-  alicedev/api/           aiohttp 内部 API（/v1/reply, /v1/agents, /v1/status, /v1/health）
+  alicedev/api/           aiohttp 内部 API（/v1/reply, /v1/agents, /v1/sessions, /v1/status, /v1/health）
   alicedev/github/        链接解析与预取
   alicedev/reports.py     发布
 tools/                    shim 与运维 CLI：paseoctl tgctl deployctl deployrun mainsync e2e_driver.py bootstrap-fixed-main.sh
