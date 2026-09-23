@@ -16,13 +16,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from alicedev_gateway.app import create_app  # noqa: E402
 from alicedev_gateway.config import GatewayConfig  # noqa: E402
 from alicedev_gateway.proxy import (  # noqa: E402
+    SHARE_VIEW_BOOT_SRC,
     SHARE_VIEW_STYLESHEET_HREF,
     decode_body,
-    inject_stylesheet,
+    inject_share_view,
 )
 from alicedev_gateway.tokens import COOKIE_NAME, TokenTable  # noqa: E402
 
 LINK = f'<link rel="stylesheet" href="{SHARE_VIEW_STYLESHEET_HREF}">'
+BOOT = f'<script src="{SHARE_VIEW_BOOT_SRC}"></script>'
 HTML = b"<!doctype html><html><head><title>Paseo</title></head><body>app</body></html>"
 JS = b"console.log('bundle');" * 50
 
@@ -99,17 +101,21 @@ def _authorized(client: TestClient) -> dict[str, str]:
 # --- pure helpers -------------------------------------------------------------
 
 
-def test_inject_before_head_close() -> None:
-    out = inject_stylesheet(HTML)
-    assert out.count(LINK.encode()) == 1
+def test_inject_boot_first_and_stylesheet_before_head_close() -> None:
+    out = inject_share_view(HTML)
+    assert out.count(LINK.encode()) == 1 and out.count(BOOT.encode()) == 1
+    # The boot script must run before any Paseo script in <head>.
+    assert out.startswith(b"<!doctype html><html><head>" + BOOT.encode())
     assert out.index(LINK.encode()) < out.index(b"</head>")
 
 
 def test_inject_is_idempotent_and_handles_missing_head() -> None:
-    once = inject_stylesheet(HTML)
-    assert inject_stylesheet(once) == once
-    assert inject_stylesheet(b"<HEAD lang=x><title>t</title>").startswith(b"<HEAD lang=x>" + LINK.encode())
-    assert inject_stylesheet(b"<p>bare</p>") == LINK.encode() + b"<p>bare</p>"
+    once = inject_share_view(HTML)
+    assert inject_share_view(once) == once
+    assert inject_share_view(b"<HEAD lang=x><title>t</title>").startswith(
+        b"<HEAD lang=x>" + LINK.encode() + BOOT.encode()
+    )
+    assert inject_share_view(b"<p>bare</p>") == LINK.encode() + BOOT.encode() + b"<p>bare</p>"
 
 
 def test_decode_body_variants() -> None:
@@ -143,6 +149,10 @@ def test_public_static_and_reports_without_cookie(tmp_path: Path) -> None:
         assert css.status == 200
         assert css.headers["Content-Type"].startswith("text/css")
         assert "left-sidebar-resize-handle" in await css.text()
+        boot = await client.get("/_alicedev/static/paseo-boot.js")
+        assert boot.status == 200
+        assert boot.headers["Content-Type"].startswith("application/javascript")
+        assert "@paseo:daemon-registry" in await boot.text()
         missing_report = await client.get("/_alicedev/r/r_aaaaaaaaaaaaaaaaaaaaaaaaaa/x.md")
         assert missing_report.status == 404
         bad_shape = await client.get("/_alicedev/r/whatever")
@@ -183,6 +193,7 @@ def test_html_navigation_is_injected_and_requests_identity(tmp_path: Path) -> No
         assert resp.status == 200
         assert LINK.encode() in raw
         assert raw.index(LINK.encode()) < raw.index(b"</head>")
+        assert raw.index(BOOT.encode()) < raw.index(b"<title>")
         assert "Content-Encoding" not in resp.headers
         assert "ETag" not in resp.headers
         assert int(resp.headers["Content-Length"]) == len(raw)

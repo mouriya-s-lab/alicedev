@@ -64,7 +64,7 @@ make -C /srv/alicedev/app fixed-main
 | `bot/requirements.txt` | `deployrun` 自动改为 `docker restart alicedev-astrbot`；长期依赖同时进 `deploy/astrbot/Dockerfile` 预装，需 §5 下一行 |
 | `deploy/`（compose、astrbot 配置） | 提交 → §3 IaC apply → `make -C /srv/alicedev/app up` |
 | `deploy/paseo`、`deploy/astrbot` Dockerfile、`harness/`、`gateway/` | 宿主检出切到新 SHA（`deployctl apply`）→ `make -C /srv/alicedev/app build` → `make up` |
-| paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ §3 → `make paseo-src` → `build` → `up`；之后用 agent-browser 重新核对分享视图的选择器（`gateway/static/paseo-view.css`） |
+| paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ §3 → `make paseo-src` → `build` → `up`；之后用 agent-browser 重新核对分享视图：选择器（`gateway/static/paseo-view.css`）与启动脚本依赖的存储键名、路由（`gateway/static/paseo-boot.js`），验收为新浏览器首次打开、刷新、前进后退都停在工作区且时间线加载 |
 
 ## 6. Telegram（tg-cli）
 
@@ -88,4 +88,4 @@ make -C /srv/alicedev/app fixed-main
 
 - AstrBot 主动发消息拿不到平台消息 id：引用 bot 消息时按消息首行的 `%n` 标记找会话。
 - paseo 0.8.0 对 idle agent 执行 `stop` 是空操作，12h 空闲关闭只记在 `agents.status`。
-- 分享视图：上游 paseo 前端存在首次加载时 host 未注册就解析路由（落到 `/open-project`）与自托管连接重复探测（对话区显示 `Subscription released`、一直加载）两个问题，见 HANDOFF。
+- 分享视图：上游 paseo 前端的首次加载路由竞态与重复连接问题由网关注入的 `paseo-boot.js` 绕开（ARCHITECTURE §8）；它会清掉浏览器里 paseo 的 host 注册表，paseo 升级后需重新核对。

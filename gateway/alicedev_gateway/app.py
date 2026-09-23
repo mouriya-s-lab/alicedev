@@ -23,10 +23,10 @@ from .tokens import COOKIE_NAME, COOKIE_MAX_AGE, SignedCookieCodec, TokenTable
 
 _LOGGER = logging.getLogger("alicedev_gateway.access")
 _SWEEP_INTERVAL_SECONDS = 60.0
-_STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css", "paseo-view.css"})
+_STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css", "paseo-view.css", "paseo-boot.js"})
 # Public, cookie-free prefixes (ARCHITECTURE §8): reports are bearer URLs and
-# static assets carry no secrets (the share-view stylesheet must load for any
-# page the proxy serves).
+# static assets carry no secrets (the share-view stylesheet and boot script must
+# load for any page the proxy serves).
 _PUBLIC_GET_PREFIXES = ("/_alicedev/r/", "/_alicedev/static/")
 _PREVIEW_SCRIPT = 'document.getElementById("redeem").submit();'
 _PREVIEW_SCRIPT_HASH = base64.b64encode(

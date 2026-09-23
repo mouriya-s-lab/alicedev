@@ -18,13 +18,16 @@ from .config import GatewayConfig
 
 _LOGGER = logging.getLogger("alicedev_gateway.proxy")
 
-# Share view (ARCHITECTURE §8): every proxied Paseo HTML document gets the
-# gateway-owned stylesheet that hides the navigation chrome.  Paseo's source is
-# never modified; the stylesheet only hides elements.
+# Share view (ARCHITECTURE §8): every proxied Paseo HTML document gets two
+# gateway-owned assets; Paseo's source is never modified.  The boot script goes
+# first in <head> so it runs before Paseo's deferred bundle (clean self-hosted
+# boot, see static/paseo-boot.js); the stylesheet only hides navigation chrome.
 SHARE_VIEW_STYLESHEET_HREF: Final[str] = "/_alicedev/static/paseo-view.css"
+SHARE_VIEW_BOOT_SRC: Final[str] = "/_alicedev/static/paseo-boot.js"
 _SHARE_VIEW_LINK: Final[bytes] = (
     f'<link rel="stylesheet" href="{SHARE_VIEW_STYLESHEET_HREF}">'.encode("ascii")
 )
+_SHARE_VIEW_BOOT: Final[bytes] = f'<script src="{SHARE_VIEW_BOOT_SRC}"></script>'.encode("ascii")
 # Largest HTML document the gateway buffers for injection.  Paseo's index.html
 # is a small SPA shell; anything larger streams through untouched.
 _MAX_INJECT_BYTES: Final[int] = 4 * 1024 * 1024
@@ -148,7 +151,7 @@ class PaseoProxy:
             return web.Response(
                 status=upstream.status,
                 reason=upstream.reason,
-                body=inject_stylesheet(decoded),
+                body=inject_share_view(decoded),
                 headers={
                     k: v for k, v in headers.items() if k.lower() not in _INJECTED_DROP_HEADERS
                 },
@@ -310,14 +313,18 @@ def decode_body(body: bytes, content_encoding: str) -> bytes | None:
     return data
 
 
-def inject_stylesheet(html: bytes) -> bytes:
-    """Insert the share-view stylesheet link into an HTML document (idempotent)."""
-    if SHARE_VIEW_STYLESHEET_HREF.encode("ascii") in html:
-        return html
-    close = _HEAD_CLOSE.search(html)
-    if close is not None:
-        return html[: close.start()] + _SHARE_VIEW_LINK + html[close.start():]
-    open_tag = _HEAD_OPEN.search(html)
-    if open_tag is not None:
-        return html[: open_tag.end()] + _SHARE_VIEW_LINK + html[open_tag.end():]
-    return _SHARE_VIEW_LINK + html
+def inject_share_view(html: bytes) -> bytes:
+    """Insert the share-view boot script and stylesheet into an HTML document (idempotent)."""
+    if SHARE_VIEW_BOOT_SRC.encode("ascii") not in html:
+        open_tag = _HEAD_OPEN.search(html)
+        at = open_tag.end() if open_tag is not None else 0
+        html = html[:at] + _SHARE_VIEW_BOOT + html[at:]
+    if SHARE_VIEW_STYLESHEET_HREF.encode("ascii") not in html:
+        close = _HEAD_CLOSE.search(html)
+        if close is not None:
+            html = html[: close.start()] + _SHARE_VIEW_LINK + html[close.start():]
+        else:
+            open_tag = _HEAD_OPEN.search(html)
+            at = open_tag.end() if open_tag is not None else 0
+            html = html[:at] + _SHARE_VIEW_LINK + html[at:]
+    return html
