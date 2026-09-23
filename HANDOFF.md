@@ -24,17 +24,14 @@
 - **Telegram**：`alicedev-tg-cli` 用自己的授权（本机会话批准的 QR 登录，账号 865341181）；验收私聊 `RIRI OuO` ↔ `@ririOuObot`。
 - **QQ**：snowluma 在跑，**QQ 账号尚未扫码登录**（人工步骤，见 runbook §7）。
 - **AstrBot dashboard**：记录在案的密码都返回 401，当前密码未知。`deployctl` 热重载用的是插件权限 API key（`ASTRBOT_API_KEY`，已进 SOPS，宿主副本 `/root/alicedev-astrbot-api-key`），不依赖 dashboard 密码。
-- **回滚物**：`/srv/alicedev/backups/pre-v3-<ts>/`（v3 前的 DuckDB、`paseo_home`、旧 `bot/` `deploy/` `templates/`、镜像 ID）；镜像标签 `alicedev/{paseo,gateway}:rollback-pre-v3`、`alicedev/{paseo,astrbot,gateway}:rollback-pre-a49ad63`、`alicedev/paseo:rollback-pre-f7ef76f`。
+- **回滚物**：`/srv/alicedev/backups/pre-v3-<ts>/`（v3 前的 DuckDB、`paseo_home`、旧 `bot/` `deploy/` `templates/`、镜像 ID）；镜像标签 `alicedev/{paseo,gateway}:rollback-pre-v3`、`alicedev/{paseo,astrbot,gateway}:rollback-pre-a49ad63`、`alicedev/paseo:rollback-pre-f7ef76f`、`alicedev/gateway:rollback-pre-boot`。
 
 验收覆盖面与上线中修复的问题见 `docs/evidence/v3-rollout/README.md`。
 
 ## 4. 待用户决定
 
-1. **分享视图的两个上游 paseo 前端问题**（paseo 源码不能改，网关侧的补丁方案此前已排除）：
-   - 首次打开分享链接时，host 还没注册就解析路由，落到 `/open-project`；再打开一次同一个工作区地址才正常。
-   - 自托管连接被重复探测，时间线停在 `Subscription released` 或是空的。`paseo-alicedev` fork 的 `6a59f442` 修过这个问题，去 fork 后问题又回来了。
-   - 可选做法：给 `mouriya-s-lab/paseo` 提上游修复后升级基础镜像，或者接受现状。
-2. **needs_human 的分享链接指向已归档的 agent**：进入 human 状态时调度会归档上一个 agent，链接打开后是 `This agent is archived`，时间线为空。时间线为空是归档造成的还是上面的连接问题造成的，还没分开验证。如果需要人能在链接里看到 AI 的过程，契约需要调整：human 状态保留上一个 agent，到结束时再归档。
+1. **分享视图的上游 paseo 根治（可选）**：首次加载落到 `/open-project` 与重复连接卡住时间线，目前由网关注入的 `paseo-boot.js` 绕开（ARCHITECTURE §8，已验收）。根治需要给 `mouriya-s-lab/paseo` 提 PR：带上旧 fork `6a59f442` 的「不重复探测已持久化的自托管连接」，并让 host 路由等 manifest 探测结束再判断；合入并升级基础镜像后可删除启动脚本。
+2. **needs_human 的分享链接指向已归档的 agent**：进入 human 状态时调度会归档上一个 agent，链接打开后是 `This agent is archived`，时间线为空。重复连接问题已由启动脚本绕开，下一个 needs_human 会话出现时再核对时间线是否因归档而为空。如果需要人能在链接里看到 AI 的过程，契约需要调整：human 状态保留上一个 agent，到结束时再归档。
 3. **`paseo-alicedev` fork**（本机 `~/Ext/code/paseo-alicedev`，分支 `feat/arch-image` `feat/embed-mode` `feat/upgrade-bot-conductor`）已不再使用；是否删除分支或整个仓库由用户决定。
 
 ## 5. 已知缺口

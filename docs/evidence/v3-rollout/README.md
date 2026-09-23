@@ -39,7 +39,17 @@ e2e before/after（`3a50eca` 对 `b6e817a`，`/alicedev` + `/会话列表`）：
 
 ## 分享视图
 
-工作区页只剩右侧 agent 区，左侧栏收起（`30-share-workspace.png`）。首次加载仍会落到 `/open-project`（`31-share-first-load-open-project.png`），见 HANDOFF 的待决事项。
+网关注入 `paseo-boot.js` 后（`ceb4ba3`），在全新的 agent-browser 会话里从 TG 签发的 `/链接 %6` 进入：
+
+| 步骤 | 地址 | 时间线 | 发消息 |
+|---|---|---|---|
+| 首次打开（`30-share-first-open.png`） | 停在 `/h/<server>/workspace/<workspace>`，左侧栏不可见 | 加载，无 `Updating messages` | 40 秒收到回复 |
+| 刷新（`31-share-after-reload.png`） | 同上 | 同上 | 28 秒收到回复 |
+| 后退到中转页再前进（`32-share-after-back-forward.png`） | 同上 | 同上 | 96 秒收到回复 |
+
+注入前的对照：首次打开落到 `/open-project`；本地已有持久化 host 时刷新，`Updating messages` 持续 20 秒以上不消失。
+
+在 paseo 界面里直接发的消息不是群聊入站，AI 的 `chat_reply` 返回 `no_pending_messages`，回答只留在 paseo 里，这是 ARCHITECTURE §5 的设计。
 
 ## 上线过程中发现并修复的问题
 
@@ -54,3 +64,4 @@ e2e before/after（`3a50eca` 对 `b6e817a`，`/alicedev` + `/会话列表`）：
 | `b6e817a` | e2e 卷里 `t2i_endpoint` 为空，卡片全部渲染失败 |
 | `1077dad` | 分享视图首次加载落到 `/open-project` 时整页空白 |
 | `1198e20` | `/会话列表 全部` 的页脚显示 `/全部 n` |
+| `ceb4ba3` | 分享视图：首次打开落到 `/open-project`，刷新后时间线卡在 `Updating messages`（上游 paseo 前端问题，由网关注入的启动脚本绕开） |
