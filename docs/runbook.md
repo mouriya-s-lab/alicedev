@@ -60,10 +60,11 @@ make -C /srv/alicedev/app fixed-main
 
 | 变更了什么 | 怎么上线 |
 |---|---|
-| `bot/`、`templates/` | 正常路径是 `/升级bot`（批准即 merge，`deploying` 状态自动部署）。手工：`docker exec -u paseo alicedev-paseo /deploy/app/tools/deployrun --app /deploy/app --commit <main sha>`，失败自动切回并重载 |
+| `bot/`、`templates/` | 正常路径是 `/升级bot`（批准即 merge，`deploying` 状态自动部署）。手工：`docker exec -u paseo alicedev-paseo /deploy/app/tools/deployrun --app /deploy/app --commit <main 完整 SHA>`（短 SHA 在 fetch 时找不到 ref），失败自动切回并重载 |
 | `bot/requirements.txt` | `deployrun` 自动改为 `docker restart alicedev-astrbot`；长期依赖同时进 `deploy/astrbot/Dockerfile` 预装，需 §5 下一行 |
 | `deploy/`（compose、astrbot 配置） | 提交 → §3 IaC apply → `make -C /srv/alicedev/app up` |
-| `deploy/paseo`、`deploy/astrbot` Dockerfile、`harness/`、`gateway/` | 宿主检出切到新 SHA（`deployctl apply`）→ `make -C /srv/alicedev/app build` → `make up` |
+| `deploy/paseo`、`deploy/astrbot` Dockerfile、`harness/` | 宿主检出切到新 SHA（`deployctl apply`）→ `make -C /srv/alicedev/app build` → `make up` |
+| `gateway/` | 宿主检出切到新 SHA（同时改了 `bot/` 时，先按本表第一行跑 `deployrun`，它会一并切检出）→ 给当前镜像打 `alicedev/gateway:rollback-<tag>` → `docker compose -f /srv/alicedev/deploy/docker-compose.yml --env-file /srv/alicedev/deploy/.env build gateway` → `… up -d --no-deps gateway`。不动 paseo；未兑换的一次性链接会失效 |
 | paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ §3 → `make paseo-src` → `build` → `up`；之后用 agent-browser 重新核对分享视图：选择器（`gateway/static/paseo-view.css`）与启动脚本依赖的存储键名、路由（`gateway/static/paseo-boot.js`），验收为新浏览器首次打开、刷新、前进后退都停在工作区且时间线加载 |
 
 ## 6. Telegram（tg-cli）

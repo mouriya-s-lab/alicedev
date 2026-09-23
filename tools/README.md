@@ -19,11 +19,11 @@ The checkout lives at `/srv/alicedev/app` on the host and is mounted at `/deploy
 
 ```sh
 # inside alicedev-paseo (the upgrade-bot `deploying` state does this):
-/deploy/app/tools/deployrun --app /deploy/app --commit <main sha>
+/deploy/app/tools/deployrun --app /deploy/app --commit <full main sha>
 ```
 
 `apply` / `run`:
-1. `git fetch <source> <ref>` (default source `origin`; GitHub auth via `GITHUB_TOKEN` through a temporary `GIT_ASKPASS`, never argv),
+1. `git fetch <source> <ref>` (default source `origin`; GitHub auth via `GITHUB_TOKEN` through a temporary `GIT_ASKPASS`, never argv). The ref must be fetchable by name: pass the full 40-char SHA, since GitHub rejects abbreviated SHAs (`couldn't find remote ref`),
 2. `git checkout --detach <sha>` and write the untracked `bot/REVISION`,
 3. activate: `reload` = `POST $ASTRBOT_API_BASE/api/v1/plugins/alicedev/reload` with `X-API-Key: $ASTRBOT_API_KEY` (scope `plugin`); a plugin that failed to load is reloaded with `/api/v1/plugins/failed/alicedev/reload` instead (reloading an unregistered name would reload every plugin). `restart` = `docker restart <container>`. `auto` (default) restarts when `bot/requirements.txt` changed, otherwise reloads.
 4. verify: poll the bot's `/v1/health` until `revision` equals the SHA and `generation` changed (reload) or the container restarted; if `ALICEDEV_INTERNAL_TOKEN` is set, `/v1/status` must report no `dsl_errors`.
