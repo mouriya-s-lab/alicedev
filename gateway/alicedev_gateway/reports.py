@@ -68,25 +68,31 @@ class ReportRenderer:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{safe_title}</title>
+  <meta name="theme-color" content="#0f0b12">
+  <link rel="icon" type="image/png" href="/_alicedev/static/alice/alice-icon.png">
+  <link rel="stylesheet" href="/_alicedev/static/alice/alice.css">
   <link rel="stylesheet" href="/_alicedev/static/pygments.css">
+  <title>{safe_title}</title>
   <style>
-    :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
-    body {{ max-width: 1040px; margin: 0 auto; padding: 2rem 1.25rem 4rem; line-height: 1.65; }}
-    .report-meta {{ color: #667085; font-size: .9rem; margin-bottom: 2rem; }}
-    pre {{ overflow-x: auto; padding: 1rem; border-radius: .5rem; }}
-    code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
-    th, td {{ border: 1px solid #98a2b3; padding: .45rem .65rem; text-align: left; }}
-    img {{ max-width: 100%; height: auto; }}
-    .task-list-item {{ list-style: none; }}
-    .task-list-item-checkbox {{ margin-right: .45rem; }}
-    .mermaid {{ overflow-x: auto; margin: 1.5rem 0; }}
+    :root {{ color-scheme: light; }}
+    .report-frame__paper {{ line-height: 1.65; }}
+    .report-frame__paper pre {{ overflow-x: auto; padding: 1rem; border-radius: .5rem; }}
+    .report-frame__paper code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+    .report-frame__paper table {{ border-collapse: collapse; width: 100%; margin: 1rem 0; }}
+    .report-frame__paper th, .report-frame__paper td {{ border: 1px solid #98a2b3; padding: .45rem .65rem; text-align: left; }}
+    .report-frame__paper img {{ max-width: 100%; height: auto; }}
+    .report-frame__paper .task-list-item {{ list-style: none; }}
+    .report-frame__paper .task-list-item-checkbox {{ margin-right: .45rem; }}
+    .report-frame__paper .mermaid {{ overflow-x: auto; margin: 1.5rem 0; }}
   </style>
 </head>
-<body>
-  <div class="report-meta">alicedev 调查报告 · 只读公开链接</div>
-  <main>{body}</main>
+<body class="alice-report">
+  <header class="report-frame__header">
+    <img class="report-frame__emblem" src="/_alicedev/static/alice/alice-emblem.webp" alt="">
+    <span class="report-frame__brand">ALICEDEV</span>
+    <span class="report-frame__meta">调查报告 · 只读公开链接</span>
+  </header>
+  <main class="report-frame__paper">{body}</main>
   <script src="/_alicedev/static/mermaid.min.js"></script>
   <script>mermaid.initialize({{ startOnLoad: true, securityLevel: 'strict' }});</script>
 </body>

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import gzip
 from pathlib import Path
 import sys
@@ -96,6 +98,19 @@ def _run(coro_fn, tmp_path: Path) -> None:
 def _authorized(client: TestClient) -> dict[str, str]:
     codec = client.app["cookie_codec"]
     return {"Cookie": f"{COOKIE_NAME}={codec.issue(user_key='telegram:1')}"}
+def _assert_themed_response(resp, body: str, *, status: int) -> None:
+    assert resp.status == status
+    assert resp.headers["Content-Type"].startswith("text/html; charset=utf-8")
+    assert "style-src 'self'" in resp.headers["Content-Security-Policy"]
+    assert "<style" not in body
+
+
+def _preview_script_hash() -> str:
+    script = 'document.getElementById("redeem").submit();'
+    digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+    return f"sha256-{digest}"
+
+
 
 
 # --- pure helpers -------------------------------------------------------------
@@ -153,16 +168,58 @@ def test_public_static_and_reports_without_cookie(tmp_path: Path) -> None:
         assert boot.status == 200
         assert boot.headers["Content-Type"].startswith("application/javascript")
         assert "@paseo:daemon-registry" in await boot.text()
+
+        alice_css = await client.get("/_alicedev/static/alice/alice.css")
+        assert alice_css.status == 200
+        assert alice_css.headers["Content-Type"] == "text/css; charset=utf-8"
+        assert "--night: #0f0b12" in await alice_css.text()
+        illustration = await client.get("/_alicedev/static/alice/alice-torn.webp")
+        assert illustration.status == 200
+        assert illustration.headers["Content-Type"] == "image/webp"
+        font = await client.get("/_alicedev/static/alice/fell-sc.woff2")
+        assert font.status == 200
+        assert font.headers["Content-Type"] == "font/woff2"
+
+        for path in (
+            "/_alicedev/static/alice/nope.css",
+            "/_alicedev/static/alice/../app.py",
+        ):
+            missing_static = await client.get(path)
+            assert missing_static.status == 404
+            assert missing_static.headers["Content-Type"].startswith("text/plain")
+            assert "静态资源不存在" in await missing_static.text()
+
+        report_id = "r_" + "a" * 26
+        report_dir = tmp_path / report_id
+        report_dir.mkdir()
+        (report_dir / "readme.md").write_text("# Tea party\n\n```mermaid\nflowchart LR\nA-->B\n```\n")
+        report = await client.get(f"/_alicedev/r/{report_id}/readme.md")
+        report_body = await report.text()
+        assert report.status == 200
+        assert '<link rel="stylesheet" href="/_alicedev/static/alice/alice.css">' in report_body
+        assert 'class="report-frame__header"' in report_body
+        assert '<style>' in report_body
+        assert "mermaid.initialize" in report_body
+
         missing_report = await client.get("/_alicedev/r/r_aaaaaaaaaaaaaaaaaaaaaaaaaa/x.md")
-        assert missing_report.status == 404
+        missing_report_body = await missing_report.text()
+        _assert_themed_response(missing_report, missing_report_body, status=404)
+        assert "报告文件不存在" in missing_report_body
         bad_shape = await client.get("/_alicedev/r/whatever")
-        assert bad_shape.status == 404
+        bad_shape_body = await bad_shape.text()
+        _assert_themed_response(bad_shape, bad_shape_body, status=404)
+        assert "网关路径不存在" in bad_shape_body
+
         post = await client.post("/_alicedev/static/paseo-view.css")
         assert post.status == 405
         status_page = await client.get("/_alicedev/")
-        assert status_page.status == 403
+        status_body = await status_page.text()
+        _assert_themed_response(status_page, status_body, status=403)
+        assert "需要有效的 alicedev 分享授权" in status_body
         paseo = await client.get("/h/srv/workspace/wks", headers={"Accept": "text/html"})
-        assert paseo.status == 403
+        paseo_body = await paseo.text()
+        _assert_themed_response(paseo, paseo_body, status=403)
+        assert "需要有效的 alicedev 分享授权" in paseo_body
         assert seen == []
 
     _run(body, tmp_path)
@@ -174,10 +231,45 @@ def test_status_page_accepts_bare_workspace_target(tmp_path: Path) -> None:
             "/_alicedev/?go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
         )
         text = await resp.text()
-        assert resp.status == 200
+        _assert_themed_response(resp, text, status=200)
         assert 'href="/h/srv/workspace/wks"' in text
+        assert "降级（bot 不可用）" in text
 
     _run(body, tmp_path)
+def test_token_preview_and_consume_are_one_time(tmp_path: Path) -> None:
+    async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
+        del seen
+        issued = await client.post(
+            "/internal/tokens",
+            headers={"X-Alicedev-Token": "internal"},
+            json={
+                "target": "/h/srv/workspace/wks",
+                "user_key": "telegram:1",
+            },
+        )
+        assert issued.status == 200
+        token = (await issued.json())["token"]
+
+        preview = await client.get(f"/t/{token}")
+        preview_body = await preview.text()
+        _assert_themed_response(preview, preview_body, status=200)
+        assert '<form id="redeem" method="post" action="/t/' in preview_body
+        assert 'document.getElementById("redeem").submit();' in preview_body
+        assert _preview_script_hash() in preview.headers["Content-Security-Policy"]
+
+        first_post = await client.post(f"/t/{token}", allow_redirects=False)
+        assert first_post.status == 303
+        assert first_post.headers["Location"].startswith("/_alicedev/?go=")
+        assert "Set-Cookie" in first_post.headers
+
+        second_post = await client.post(f"/t/{token}", allow_redirects=False)
+        second_body = await second_post.text()
+        _assert_themed_response(second_post, second_body, status=403)
+        assert "链接无效、已使用或已过期" in second_body
+
+    _run(body, tmp_path)
+
+
 
 
 # --- share-view injection ---------------------------------------------------------------

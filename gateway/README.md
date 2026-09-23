@@ -42,6 +42,7 @@ docker run --rm --env-file deploy/dev/gateway.env \
 - **分享视图**：浏览器文档请求（GET 且 `Accept` 含 `text/html`）转发上游时改发 `Accept-Encoding: identity`，拿到 `text/html` 200 后在 `<head>` 开头注入 `<script src="/_alicedev/static/paseo-boot.js"></script>`、在 `</head>` 前注入 `<link rel="stylesheet" href="/_alicedev/static/paseo-view.css">`，去掉 `Content-Length`、`Content-Encoding`、`ETag` 让 aiohttp 按新正文重算；Caddy 仍会对浏览器压缩。上游若无视 identity 仍返回 gzip/deflate，网关先解压再注入；无法解码的编码（如 br）或超过 4 MiB 的文档原样透传并记 warning。其他资源（JS/CSS/图片、HEAD、WS）逐字节流式透传。两者都不改 Paseo 源码：`static/paseo-boot.js` 在 Paseo 的 bundle 之前清掉持久化的 host 注册表，并把 host 路由改为 Paseo 自己的启动恢复，绕开首次加载落到 `/open-project` 与重复连接卡住时间线两个问题（原理见脚本头注释与 ARCHITECTURE §8）；`static/paseo-view.css` 只做隐藏。二者都是界面层处理，不是授权边界。
 - **样式表选择器**取自 Paseo 的 React Native Web `testID`（渲染为 `data-testid`：`left-sidebar-resize-handle`、`sidebar-close`、`menu-button`、`workspace-new-tab-button`、`workspace-explorer-toggle` 等），绑定当前部署的 Paseo 版本。每次升级 Paseo 后都要用 agent-browser 打开一个分享链接核对：左侧栏及其导航入口不可见，会话标签、对话、输入框可见且可发消息。
 - 报告只允许 `r_[a-z2-7]{26}`、单段 basename 和白名单扩展名。Markdown 使用 `html=False`、table/strikethrough/footnote/tasklists/deflist/front_matter/texmath、Pygments 及 `securityLevel: 'strict'` 的 Mermaid。响应带 `X-Robots-Tag: noindex` 与 `Referrer-Policy: no-referrer`，不提供目录列表。
+- 网关自己输出的链接确认、状态页、授权/失效/找不到 403/404 与报告外框统一使用 Alice 黑童话主题；主题资源仅从 `/_alicedev/static/alice/` 的精确白名单（`alice.css`、四张插画/底纹图片、`alice-icon.png`、两种 `woff2` 字体与 `OFL-IMFell.txt`）下发，按扩展名返回 MIME，白名单外静态路径保持纯文本 404。
 - access log 只记录方法、脱敏路径、状态与耗时：`/t/<token>` 记为 `/t/***`，不会记录请求 query、header 或 cookie。
 
 ## 重启语义

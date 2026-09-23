@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-from dataclasses import dataclass
 from html import escape
-import hashlib
 import json
 import logging
 from pathlib import Path
@@ -16,6 +13,17 @@ from urllib.parse import quote, urlsplit
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .config import GatewayConfig
+from .pages import (
+    BotCommand,
+    BotScenario,
+    BotStatus,
+    CONFIRM_HEADERS,
+    ErrorPageKind,
+    THEMED_HEADERS,
+    render_error_page,
+    render_status,
+    render_token_preview,
+)
 from .proxy import SELF_HOSTED_MANIFEST, PaseoProxy
 from .reports import ReportRenderer, resolve_report_asset
 from .tokens import COOKIE_NAME, COOKIE_MAX_AGE, SignedCookieCodec, TokenTable
@@ -23,69 +31,30 @@ from .tokens import COOKIE_NAME, COOKIE_MAX_AGE, SignedCookieCodec, TokenTable
 
 _LOGGER = logging.getLogger("alicedev_gateway.access")
 _SWEEP_INTERVAL_SECONDS = 60.0
-_STATIC_FILES = frozenset({"mermaid.min.js", "pygments.css", "paseo-view.css", "paseo-boot.js"})
-# Public, cookie-free prefixes (ARCHITECTURE §8): reports are bearer URLs and
-# static assets carry no secrets (the share-view stylesheet and boot script must
-# load for any page the proxy serves).
-_PUBLIC_GET_PREFIXES = ("/_alicedev/r/", "/_alicedev/static/")
-_PREVIEW_SCRIPT = 'document.getElementById("redeem").submit();'
-_PREVIEW_SCRIPT_HASH = base64.b64encode(
-    hashlib.sha256(_PREVIEW_SCRIPT.encode("utf-8")).digest()
-).decode("ascii")
-_PREVIEW_HEADERS = {
-    "Cache-Control": "no-store",
-    "Content-Security-Policy": (
-        "default-src 'none'; "
-        f"script-src 'sha256-{_PREVIEW_SCRIPT_HASH}'; "
-        "form-action 'self'; "
-        "base-uri 'none'; "
-        "frame-ancestors 'none'; "
-        "object-src 'none'"
-    ),
-    "Referrer-Policy": "no-referrer",
-    "X-Content-Type-Options": "nosniff",
-    "X-Frame-Options": "DENY",
-    "X-Robots-Tag": "noindex",
+
+# This is intentionally an exact path -> MIME manifest. Request paths are
+# looked up before any filesystem access, so an unlisted path cannot become a
+# static file fallback or traversal primitive.
+STATIC_MANIFEST: dict[str, str] = {
+    "mermaid.min.js": "application/javascript; charset=utf-8",
+    "pygments.css": "text/css; charset=utf-8",
+    "paseo-view.css": "text/css; charset=utf-8",
+    "paseo-boot.js": "application/javascript; charset=utf-8",
+    "alice/alice.css": "text/css; charset=utf-8",
+    "alice/alice-hero.webp": "image/webp",
+    "alice/alice-torn.webp": "image/webp",
+    "alice/alice-emblem.webp": "image/webp",
+    "alice/damask.webp": "image/webp",
+    "alice/alice-icon.png": "image/png",
+    "alice/fell-sc.woff2": "font/woff2",
+    "alice/fell-italic.woff2": "font/woff2",
+    "alice/OFL-IMFell.txt": "text/plain; charset=utf-8",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class BotCommand:
-    name: str
-    description: str
-
-
-@dataclass(frozen=True, slots=True)
-class BotScenario:
-    name: str
-    description: str
-
-
-@dataclass(frozen=True, slots=True)
-class BotStatus:
-    ok: bool
-    generation: str
-    uptime_s: str
-    platforms: tuple[str, ...]
-    commands: tuple[BotCommand, ...]
-    scenarios: tuple[BotScenario, ...]
-    active_sessions: str
-    queued_sessions: str
-    error: str | None = None
-
-    @classmethod
-    def unavailable(cls, error: str) -> "BotStatus":
-        return cls(
-            ok=False,
-            generation="—",
-            uptime_s="—",
-            platforms=(),
-            commands=(),
-            scenarios=(),
-            active_sessions="—",
-            queued_sessions="—",
-            error=error,
-        )
+_PUBLIC_GET_PREFIXES = ("/_alicedev/r/", "/_alicedev/static/")
+_PREVIEW_HEADERS = {
+    **CONFIRM_HEADERS,
+    "Cache-Control": "no-store",
+}
 
 
 def create_app(config: GatewayConfig) -> web.Application:
@@ -103,7 +72,7 @@ def create_app(config: GatewayConfig) -> web.Application:
     app.router.add_get("/_alicedev/health", health)
     app.router.add_get("/_alicedev/", status_page)
     app.router.add_get("/_alicedev/r/{report_id}/{basename}", report)
-    app.router.add_get("/_alicedev/static/{asset}", static_asset)
+    app.router.add_get("/_alicedev/static/{asset:.+}", static_asset)
     app.router.add_get("/_paseo/hosts.json", self_hosted_manifest)
     app.router.add_route("*", "/{path_info:.*}", proxy)
     app.on_startup.append(start_runtime)
@@ -158,8 +127,21 @@ async def cookie_gate_middleware(
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
     if not codec.verify(request.cookies.get(COOKIE_NAME)):
-        raise web.HTTPForbidden(text="需要有效的 alicedev 分享授权。\n")
+        return _themed_response(
+            403,
+            render_error_page(ErrorPageKind.NEEDS_INVITATION),
+        )
     return await handler(request)
+
+
+def _themed_response(status: int, text: str) -> web.Response:
+    return web.Response(
+        status=status,
+        text=text,
+        content_type="text/html",
+        charset="utf-8",
+        headers=THEMED_HEADERS,
+    )
 
 async def start_runtime(app: web.Application) -> None:
     config: GatewayConfig = app["gateway_config"]
@@ -221,9 +203,12 @@ async def preview_token(request: web.Request) -> web.Response:
     token = request.match_info["token"]
     tokens: TokenTable = request.app["token_table"]
     if not tokens.validate_token(token) or tokens.peek(token) is None:
-        raise web.HTTPForbidden(text="链接无效、已使用或已过期。\n")
+        return _themed_response(
+            403,
+            render_error_page(ErrorPageKind.LINK_SPENT),
+        )
     return web.Response(
-        text=_render_token_preview(request.path),
+        text=render_token_preview(request.path),
         content_type="text/html",
         charset="utf-8",
         headers=_PREVIEW_HEADERS,
@@ -235,7 +220,10 @@ async def redeem_token(request: web.Request) -> web.StreamResponse:
     tokens: TokenTable = request.app["token_table"]
     record = tokens.consume(token)
     if record is None:
-        raise web.HTTPForbidden(text="链接无效、已使用或已过期。\n")
+        return _themed_response(
+            403,
+            render_error_page(ErrorPageKind.LINK_SPENT),
+        )
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
     response = web.HTTPSeeOther(
@@ -269,11 +257,9 @@ async def status_page(request: web.Request) -> web.Response:
     status = await _fetch_bot_status(session, config)
     requested_target = request.query.get("go", "")
     target = requested_target if TokenTable.validate_target(requested_target) else None
-    return web.Response(
-        text=_render_status(status, target),
-        content_type="text/html",
-        charset="utf-8",
-        headers={"Referrer-Policy": "no-referrer"},
+    return _themed_response(
+        200,
+        render_status(status, target),
     )
 
 
@@ -285,7 +271,10 @@ async def report(request: web.Request) -> web.StreamResponse:
         request.match_info["basename"],
     )
     if asset is None:
-        raise web.HTTPNotFound(text="报告文件不存在。\n")
+        return _themed_response(
+            404,
+            render_error_page(ErrorPageKind.REPORT_MISSING),
+        )
 
     headers = {
         "X-Robots-Tag": "noindex",
@@ -310,12 +299,12 @@ async def report(request: web.Request) -> web.StreamResponse:
 
 async def static_asset(request: web.Request) -> web.StreamResponse:
     asset_name = request.match_info["asset"]
-    if asset_name not in _STATIC_FILES:
+    content_type = STATIC_MANIFEST.get(asset_name)
+    if content_type is None:
         raise web.HTTPNotFound(text="静态资源不存在。\n")
     static_path = Path(__file__).resolve().parent.parent / "static" / asset_name
     if not static_path.is_file():
         raise web.HTTPNotFound(text="静态资源不存在。\n")
-    content_type = "application/javascript; charset=utf-8" if asset_name.endswith(".js") else "text/css; charset=utf-8"
     return web.FileResponse(
         static_path,
         headers={
@@ -334,7 +323,10 @@ async def proxy(request: web.Request) -> web.StreamResponse:
         or request.path.startswith("/t/")
         or request.path == "/internal/tokens"
     ):
-        raise web.HTTPNotFound(text="网关路径不存在。\n")
+        return _themed_response(
+            404,
+            render_error_page(ErrorPageKind.PATH_MISSING),
+        )
     paseo: PaseoProxy = request.app["paseo_proxy"]
     if request.headers.get("Upgrade", "").lower() == "websocket":
         return await paseo.websocket(request)
@@ -429,89 +421,9 @@ def _display_value(value: object) -> str:
         return escape(str(value))
     return "—"
 
-
-def _render_status(status: BotStatus, target: str | None) -> str:
-    state = "运行中" if status.ok else "降级（bot 不可用）"
-    state_class = "ok" if status.ok else "degraded"
-    error = f'<p class="error">{escape(status.error)}</p>' if status.error else ""
-    platforms = "、".join(escape(item) for item in status.platforms) or "—"
-    commands = _render_items(
-        (item.name, item.description) for item in status.commands
-    )
-    scenarios = _render_items(
-        (item.name, item.description) for item in status.scenarios
-    )
-    action = (
-        f'<a class="button" href="{escape(target, quote=True)}">进入会话</a>'
-        if target
-        else '<span class="muted">没有可进入的会话目标</span>'
-    )
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>alicedev 状态</title>
-  <style>
-    :root {{ font-family: system-ui, sans-serif; color-scheme: light dark; }}
-    body {{ max-width: 920px; margin: 0 auto; padding: 2rem 1.25rem; line-height: 1.55; }}
-    .state {{ border-left: .35rem solid #12b76a; padding: .8rem 1rem; background: color-mix(in srgb, #12b76a 12%, transparent); }}
-    .state.degraded {{ border-color: #f04438; background: color-mix(in srgb, #f04438 12%, transparent); }}
-    .button {{ display: inline-block; padding: .6rem 1rem; border-radius: .4rem; background: #175cd3; color: white; text-decoration: none; }}
-    .muted, .error {{ color: #667085; }}
-    .error {{ color: #d92d20; }}
-    code {{ font-family: ui-monospace, monospace; }}
-  </style>
-</head>
-<body>
-  <h1>alicedev</h1>
-  <section class="state {state_class}"><strong>bot 状态：{state}</strong>{error}</section>
-  <p>运行代数：<code>{status.generation}</code> · 运行时间：<code>{status.uptime_s}</code> 秒</p>
-  <p>平台：{platforms} · 进行中会话：{status.active_sessions} · 排队：{status.queued_sessions}</p>
-  <h2>可用指令</h2>
-  {commands}
-  <h2>场景</h2>
-  {scenarios}
-  <p>{action}</p>
-</body>
-</html>
-"""
-
-
-def _render_token_preview(action: str) -> str:
-    escaped_action = escape(action, quote=True)
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>继续 alicedev</title>
-</head>
-<body>
-  <h1>继续 alicedev</h1>
-  <p>如果页面没有自动跳转，请点击下面的按钮。</p>
-  <form id="redeem" method="post" action="{escaped_action}">
-    <button type="submit">继续</button>
-  </form>
-  <script>{_PREVIEW_SCRIPT}</script>
-</body>
-</html>
-"""
-
-
-
 def _public_scheme(config: GatewayConfig) -> str:
     hostname = urlsplit(f"//{config.public_host}").hostname
     return "http" if hostname in {"localhost", "127.0.0.1", "::1"} else "https"
-def _render_items(items: object) -> str:
-    values = list(items)  # type: ignore[arg-type]
-    if not values:
-        return '<p class="muted">暂无</p>'
-    rows = []
-    for name, description in values:
-        detail = f"：{escape(description)}" if description else ""
-        rows.append(f"<li><code>{escape(name)}</code>{detail}</li>")
-    return "<ul>" + "".join(rows) + "</ul>"
 
 
 def _constant_time_equal(left: str, right: str) -> bool:
