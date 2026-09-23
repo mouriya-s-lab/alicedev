@@ -284,8 +284,11 @@ async def report(request: web.Request) -> web.StreamResponse:
     if asset.path.suffix.lower() == ".md":
         try:
             source = asset.path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise web.HTTPInternalServerError(text="报告读取失败。\n") from exc
+        except (OSError, UnicodeDecodeError):
+            return _themed_response(
+                500,
+                render_error_page(ErrorPageKind.REPORT_UNREADABLE),
+            )
         renderer: ReportRenderer = request.app["report_renderer"]
         return web.Response(
             text=renderer.render(source, title=asset.path.name),

@@ -350,3 +350,54 @@ def test_self_hosted_prefix_and_head_are_not_injected(tmp_path: Path) -> None:
         assert "Accept-Encoding" not in seen[-1] or seen[-1]["Accept-Encoding"] != "identity"
 
     _run(body, tmp_path)
+
+
+def test_paseo_down_html_and_non_html(tmp_path: Path) -> None:
+    async def body() -> None:
+        config = GatewayConfig(
+            secret=b"test-secret",
+            internal_token="internal",
+            paseo_upstream="http://127.0.0.1:9",
+            paseo_password="pw",
+            bot_upstream="http://127.0.0.1:9",
+            public_host="localhost",
+            reports_published_root=tmp_path,
+        )
+        client = TestClient(TestServer(create_app(config)))
+        await client.start_server()
+        try:
+            html_resp = await client.get(
+                "/h/srv/workspace/wks",
+                headers={**_authorized(client), "Accept": "text/html"},
+            )
+            html_body = await html_resp.text()
+            _assert_themed_response(html_resp, html_body, status=502)
+            assert "paseo 上游暂时不可用" in html_body
+
+            js_resp = await client.get(
+                "/h/srv/workspace/wks",
+                headers={**_authorized(client), "Accept": "application/javascript"},
+            )
+            js_body = await js_resp.text()
+            assert js_resp.status == 502
+            assert not js_resp.headers["Content-Type"].startswith("text/html")
+            assert "paseo 上游暂时不可用" in js_body
+        finally:
+            await client.close()
+
+    asyncio.run(body())
+
+
+def test_unreadable_report_returns_themed_500(tmp_path: Path) -> None:
+    async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
+        del seen
+        report_id = "r_" + "b" * 26
+        report_dir = tmp_path / report_id
+        report_dir.mkdir()
+        (report_dir / "bad.md").write_bytes(b"\xff\xfe\x00invalid-utf8")
+        resp = await client.get(f"/_alicedev/r/{report_id}/bad.md")
+        body_text = await resp.text()
+        _assert_themed_response(resp, body_text, status=500)
+        assert "报告读取失败" in body_text
+
+    _run(body, tmp_path)

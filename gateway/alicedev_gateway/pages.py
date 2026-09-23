@@ -41,6 +41,8 @@ class ErrorPageKind(Enum):
     NEEDS_INVITATION = "needs-invitation"
     REPORT_MISSING = "report-missing"
     PATH_MISSING = "path-missing"
+    PASEO_DOWN = "paseo-down"
+    REPORT_UNREADABLE = "report-unreadable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +194,23 @@ def render_error_page(kind: ErrorPageKind) -> str:
             title = "这条小路不通往任何地方"
             eyebrow = "ALICEDEV · LOST IN WONDERLAND"
             content = "<h1>这条小路不通往任何地方</h1><p>网关路径不存在。</p>"
+        case ErrorPageKind.PASEO_DOWN:
+            title = "怀表停了一会儿"
+            eyebrow = "ALICEDEV · THE CLOCK STOPPED"
+            content = (
+                "<h1>怀表停了一会儿</h1>"
+                "<p>paseo 上游暂时不可用。</p>"
+                "<p class=\"alice-hint\">工作区正在重启或暂时连不上，稍等片刻再刷新；"
+                "一直打不开就在群里说一声。</p>"
+            )
+        case ErrorPageKind.REPORT_UNREADABLE:
+            title = "这一章的墨迹糊掉了"
+            eyebrow = "ALICEDEV · SMUDGED INK"
+            content = (
+                "<h1>这一章的墨迹糊掉了</h1>"
+                "<p>报告读取失败。</p>"
+                "<p class=\"alice-hint\">稍后再打开试试；一直这样就在群里说一声。</p>"
+            )
         case _ as unreachable:
             raise AssertionError(f"unhandled error page kind: {unreachable!r}")
 
