@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 import base64
 import hashlib
-from html import escape, unescape
-from typing import Sequence
+from html import escape
+from typing import assert_never
 
 
 ALICE_STATIC_PREFIX = "/_alicedev/static/alice"
@@ -46,42 +46,19 @@ class ErrorPageKind(Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class BotCommand:
+class SessionDetail:
+    """Bot ``GET /v1/sessions/{id}`` (ARCHITECTURE §6), parsed at the gateway boundary."""
+
+    label: str
     name: str
-    description: str
+    scenario_name: str
+    scenario_description: str
+    state_label: str
+    created_by: str
+    created_at: str
+    last_activity_at: str | None
+    is_current: bool
 
-
-@dataclass(frozen=True, slots=True)
-class BotScenario:
-    name: str
-    description: str
-
-
-@dataclass(frozen=True, slots=True)
-class BotStatus:
-    ok: bool
-    generation: str
-    uptime_s: str
-    platforms: tuple[str, ...]
-    commands: tuple[BotCommand, ...]
-    scenarios: tuple[BotScenario, ...]
-    active_sessions: str
-    queued_sessions: str
-    error: str | None = None
-
-    @classmethod
-    def unavailable(cls, error: str) -> "BotStatus":
-        return cls(
-            ok=False,
-            generation="—",
-            uptime_s="—",
-            platforms=(),
-            commands=(),
-            scenarios=(),
-            active_sessions="—",
-            queued_sessions="—",
-            error=error,
-        )
 
 
 CONFIRM_CSP = f"{THEMED_CSP}; script-src 'sha256-{PREVIEW_SCRIPT_HASH}'"
@@ -137,7 +114,7 @@ def _page_shell(
         {content}
       </section>
     </div>
-    <footer class="alice-footer">alicedev · 仙境工作室</footer>
+    <footer class="alice-footer">alicedev</footer>
   </main>
 </body>
 </html>
@@ -178,21 +155,21 @@ def render_error_page(kind: ErrorPageKind) -> str:
                 "<p class=\"alice-hint\">回到群里发送 <code>/链接</code>，爱丽丝会再给你一张。</p>"
             )
         case ErrorPageKind.NEEDS_INVITATION:
-            title = "你还没有茶会的请柬"
-            eyebrow = "ALICEDEV · NO INVITATION"
+            title = "这扇门还没有为你打开"
+            eyebrow = "ALICEDEV · NO KEY"
             content = (
-                "<h1>你还没有茶会的请柬</h1>"
+                "<h1>这扇门还没有为你打开</h1>"
                 "<p>需要有效的 alicedev 分享授权。</p>"
                 "<p class=\"alice-hint\">请从群里的分享链接进入；没有链接就在群里发送 "
                 "<code>/链接</code>。</p>"
             )
         case ErrorPageKind.REPORT_MISSING:
             title = "这本书里没有这一章"
-            eyebrow = "ALICEDEV · LOST IN WONDERLAND"
+            eyebrow = "ALICEDEV · NOT FOUND"
             content = "<h1>这本书里没有这一章</h1><p>报告文件不存在。</p>"
         case ErrorPageKind.PATH_MISSING:
             title = "这条小路不通往任何地方"
-            eyebrow = "ALICEDEV · LOST IN WONDERLAND"
+            eyebrow = "ALICEDEV · NOT FOUND"
             content = "<h1>这条小路不通往任何地方</h1><p>网关路径不存在。</p>"
         case ErrorPageKind.PASEO_DOWN:
             title = "怀表停了一会儿"
@@ -211,8 +188,8 @@ def render_error_page(kind: ErrorPageKind) -> str:
                 "<p>报告读取失败。</p>"
                 "<p class=\"alice-hint\">稍后再打开试试；一直这样就在群里说一声。</p>"
             )
-        case _ as unreachable:
-            raise AssertionError(f"unhandled error page kind: {unreachable!r}")
+        case _:
+            assert_never(kind)
 
     return _page_shell(
         title=title,
@@ -226,138 +203,56 @@ def render_error_page(kind: ErrorPageKind) -> str:
     )
 
 
-def render_status(status: BotStatus, target: str | None) -> str:
-    """Render the authenticated bot status page."""
+def render_session_page(detail: SessionDetail | None, target: str) -> str:
+    """Render the session page a redeemed link lands on (ARCHITECTURE §8)."""
 
-    state_class = "alice-status--ok" if status.ok else "alice-status--degraded"
-    state_label = "♠ 运行中" if status.ok else "♥ 降级（bot 不可用）"
-    error = (
-        f'<p class="alice-status-error">{escape(status.error)}</p>'
-        if status.error
-        else ""
-    )
-    platforms = _render_platforms(status.platforms)
-    commands = _render_items(status.commands)
-    scenarios = _render_items(status.scenarios)
-    uptime = _humanize_uptime(status.uptime_s)
-    raw_uptime = escape(unescape(status.uptime_s), quote=True)
     action = (
-        f'<a class="alice-button" href="{escape(target, quote=True)}">进入会话</a>'
-        if target
-        else '<span class="alice-muted">没有可进入的会话目标</span>'
+        '<p class="alice-action">'
+        f'<a class="alice-button" href="{escape(target, quote=True)}">进入会话</a></p>'
+    )
+    if detail is None:
+        content = f"""<div class="alice-card-heading">
+  <img class="alice-emblem" src="{ALICE_EMBLEM_SRC}" alt="">
+  <h1 class="alice-session-title">会话信息暂时取不到</h1>
+</div>
+<p>bot 暂时没有返回这个会话的信息，稍后刷新再看；进入会话不受影响。</p>
+{action}"""
+        return _page_shell(
+            title="alicedev 会话",
+            eyebrow="ALICEDEV · SESSION",
+            content=content,
+            image_src=ALICE_HERO_SRC,
+            image_alt="持着怀表的哥特洛丽塔爱丽丝",
+            image_class="alice-art--hero",
+        )
+
+    # The scenario id (e.g. "requirement") is internal; its description is what people read.
+    scenario = escape(detail.scenario_description or detail.scenario_name)
+    current = (
+        '<span class="alice-status alice-status--current">本群当前会话</span>'
+        if detail.is_current
+        else ""
     )
     content = f"""<div class="alice-card-heading">
   <img class="alice-emblem" src="{ALICE_EMBLEM_SRC}" alt="">
-  <h1>欢迎回到仙境</h1>
+  <h1 class="alice-session-title">{escape(detail.name)}</h1>
 </div>
-<div class="alice-status-block" aria-label="bot 状态">
-  <span class="alice-status {state_class}">{state_label}</span>
-  {error}
+<p class="alice-subtitle">{scenario}</p>
+<div class="alice-status-block">
+  <span class="alice-status alice-status--state">{escape(detail.state_label)}</span>
+  {current}
 </div>
-<p class="alice-action">{action}</p>
-<div class="alice-stat-grid">
-  <div class="alice-stat"><span>运行代数</span><strong>{status.generation}</strong></div>
-  <div class="alice-stat"><span>运行时间</span><strong title="{raw_uptime}">{uptime}</strong></div>
-  <div class="alice-stat"><span>进行中会话</span><strong>{status.active_sessions}</strong></div>
-  <div class="alice-stat"><span>排队</span><strong>{status.queued_sessions}</strong></div>
-</div>
-<div class="alice-platforms">
-  <span class="alice-stat-label">平台</span>
-  {platforms}
-</div>
-<div class="alice-status-sections">
-  <section class="alice-list-section">
-    <h2>可用指令</h2>
-    {commands}
-  </section>
-  <section class="alice-list-section">
-    <h2>场景</h2>
-    {scenarios}
-  </section>
-</div>"""
+{action}
+<dl class="alice-facts">
+  <dt>创建人</dt><dd>{escape(detail.created_by)}</dd>
+  <dt>创建时间</dt><dd>{escape(detail.created_at)}</dd>
+  <dt>最近活动</dt><dd>{escape(detail.last_activity_at or "—")}</dd>
+</dl>"""
     return _page_shell(
-        title="alicedev 状态",
-        eyebrow="ALICEDEV · TEA PARTY",
+        title=f"{detail.label} {detail.name} · alicedev",
+        eyebrow=f"ALICEDEV · {detail.label}",
         content=content,
         image_src=ALICE_HERO_SRC,
         image_alt="持着怀表的哥特洛丽塔爱丽丝",
-        image_class="alice-art--hero alice-art--status",
-        card_class="alice-card--status",
+        image_class="alice-art--hero",
     )
-
-
-def _render_platforms(values: Sequence[str]) -> str:
-    unique: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if value not in seen:
-            seen.add(value)
-            unique.append(value)
-    if not unique:
-        return "—"
-    return "<span class=\"alice-tag-list\">" + "".join(
-        f'<span class="alice-tag">{escape(value)}</span>' for value in unique
-    ) + "</span>"
-
-
-def _render_items(items: Sequence[BotCommand | BotScenario]) -> str:
-    if not items:
-        return '<p class="alice-muted">暂无</p>'
-
-    chip_rows: list[str] = []
-    detail_rows: list[str] = []
-    for item in items:
-        name = item.name if item.name.startswith("/") else f"/{item.name}"
-        if item.description:
-            detail_rows.append(
-                f'<li><code>{escape(name)}</code>'
-                f'<span class="alice-item-description">{escape(item.description)}</span></li>'
-            )
-        else:
-            chip_rows.append(f'<li><code>{escape(name)}</code></li>')
-
-    groups: list[str] = []
-    if chip_rows:
-        groups.append(
-            '<ul class="alice-command-list alice-command-list--chips">'
-            + "".join(chip_rows)
-            + "</ul>"
-        )
-    if detail_rows:
-        groups.append(
-            '<ul class="alice-command-list alice-command-list--described">'
-            + "".join(detail_rows)
-            + "</ul>"
-        )
-    return "".join(groups)
-
-
-def _humanize_uptime(value: str) -> str:
-    """Turn a numeric seconds value into a compact Chinese duration."""
-
-    raw = unescape(value)
-    try:
-        seconds = float(raw)
-    except (TypeError, ValueError):
-        return escape(raw)
-    if seconds < 0:
-        return escape(raw)
-    total = int(seconds)
-    days, remainder = divmod(total, 86_400)
-    hours, remainder = divmod(remainder, 3_600)
-    minutes, seconds_left = divmod(remainder, 60)
-    if days:
-        parts = [f"{days} 天"]
-        if hours:
-            parts.append(f"{hours} 小时")
-        if minutes:
-            parts.append(f"{minutes} 分钟")
-        return " ".join(parts)
-    if hours:
-        parts = [f"{hours} 小时"]
-        if minutes:
-            parts.append(f"{minutes} 分钟")
-        return " ".join(parts)
-    if minutes:
-        return f"{minutes} 分钟"
-    return f"{seconds_left} 秒"

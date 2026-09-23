@@ -8,6 +8,7 @@ import hashlib
 import gzip
 from pathlib import Path
 import sys
+from urllib.parse import parse_qs, urlsplit
 import zlib
 
 from aiohttp import web
@@ -59,9 +60,22 @@ def _fake_upstream(seen: list[dict[str, str]]) -> web.Application:
             headers={"Content-Type": "application/javascript", "Content-Encoding": "gzip"},
         )
 
+    async def bot_session(request: web.Request) -> web.Response:
+        if request.headers.get("X-Alicedev-Token") != "internal" or request.match_info["id"] != "7":
+            return web.json_response({"error": "session_unknown"}, status=404)
+        return web.json_response({
+            "label": "%3", "name": "K 线缓存跨日失效 <调查>",
+            "scenario": {"name": "investigate", "description": "调查问题并给出结论"},
+            "state": {"name": "discussing", "label": "对话中"},
+            "created_by": "telegram:1", "created_at": "2026-09-23 04:10",
+            "last_activity_at": None, "is_current": True,
+        })
+
     app = web.Application()
     app.router.add_get("/h/srv/workspace/wks", document)
     app.router.add_get("/bundle.js", script)
+    # The same fake also answers the bot's session lookup (ARCHITECTURE §6).
+    app.router.add_get("/v1/sessions/{id}", bot_session)
     return app
 
 
@@ -74,7 +88,7 @@ async def _clients(tmp_path: Path) -> tuple[TestClient, TestServer, list[dict[st
         internal_token="internal",
         paseo_upstream=str(upstream.make_url("")).rstrip("/"),
         paseo_password="pw",
-        bot_upstream="http://127.0.0.1:9",
+        bot_upstream=str(upstream.make_url("")).rstrip("/"),
         public_host="localhost",
         reports_published_root=tmp_path,
     )
@@ -225,26 +239,48 @@ def test_public_static_and_reports_without_cookie(tmp_path: Path) -> None:
     _run(body, tmp_path)
 
 
-def test_status_page_accepts_bare_workspace_target(tmp_path: Path) -> None:
+def test_session_page_shows_only_session_details(tmp_path: Path) -> None:
     async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
         resp = await client.get(
-            "/_alicedev/?go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
+            "/_alicedev/?session=7&go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
         )
         text = await resp.text()
         _assert_themed_response(resp, text, status=200)
         assert 'href="/h/srv/workspace/wks"' in text
-        assert "降级（bot 不可用）" in text
+        assert "K 线缓存跨日失效 &lt;调查&gt;" in text and "ALICEDEV · %3" in text
+        assert "对话中" in text and "本群当前会话" in text and "调查问题并给出结论" in text
+        assert "指令" not in text
+
+        unknown = await client.get(
+            "/_alicedev/?session=8&go=%2Fh%2Fsrv%2Fworkspace%2Fwks", headers=_authorized(client)
+        )
+        unknown_text = await unknown.text()
+        _assert_themed_response(unknown, unknown_text, status=200)
+        assert "会话信息暂时取不到" in unknown_text and 'href="/h/srv/workspace/wks"' in unknown_text
+
+        for query in ("?go=%2Fh%2Fsrv%2Fworkspace%2Fwks", "?session=7", "?session=x&go=%2Fsettings"):
+            bad = await client.get(f"/_alicedev/{query}", headers=_authorized(client))
+            _assert_themed_response(bad, await bad.text(), status=404)
 
     _run(body, tmp_path)
+
+
 def test_token_preview_and_consume_are_one_time(tmp_path: Path) -> None:
     async def body(client: TestClient, seen: list[dict[str, str]]) -> None:
         del seen
+        no_session = await client.post(
+            "/internal/tokens",
+            headers={"X-Alicedev-Token": "internal"},
+            json={"target": "/h/srv/workspace/wks", "user_key": "telegram:1"},
+        )
+        assert no_session.status == 400
         issued = await client.post(
             "/internal/tokens",
             headers={"X-Alicedev-Token": "internal"},
             json={
                 "target": "/h/srv/workspace/wks",
                 "user_key": "telegram:1",
+                "session_id": 7,
             },
         )
         assert issued.status == 200
@@ -259,7 +295,9 @@ def test_token_preview_and_consume_are_one_time(tmp_path: Path) -> None:
 
         first_post = await client.post(f"/t/{token}", allow_redirects=False)
         assert first_post.status == 303
-        assert first_post.headers["Location"].startswith("/_alicedev/?go=")
+        location = urlsplit(first_post.headers["Location"])
+        assert location.path == "/_alicedev/"
+        assert parse_qs(location.query) == {"session": ["7"], "go": ["/h/srv/workspace/wks"]}
         assert "Set-Cookie" in first_post.headers
 
         second_post = await client.post(f"/t/{token}", allow_redirects=False)

@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from rt_support import ADMIN, CHAT, GitResult, inbound, make_env, quote_of
+from rt_support import ADMIN, CHAT, USER, GitResult, inbound, make_env, quote_of
 
 from alicedev.actions.inbound import Mention, QuotedMessage
 from alicedev.paseo.control import AgentStatus
@@ -206,6 +206,8 @@ def test_share_links_per_mention(tmp_path: Path) -> None:
         assert target.startswith("/h/srv1/workspace/") and "open=agent%3A" in target
         tokens = await env.store.fetch_all("SELECT session_id, user_key FROM tokens_issued ORDER BY user_key")
         assert [t[1] for t in tokens] == ["telegram:5", "telegram:6"]
+        # The gateway gets the same session the link was recorded for (its session page, §8).
+        assert [g["session_id"] for g in env.gateway.issued] == [t[0] for t in tokens]
         await env.close()
 
     run(main())
@@ -368,6 +370,13 @@ def test_status_and_health_routes(tmp_path: Path) -> None:
             ref = env.paseo.created[0]["agent_ref"]
             agent = await (await client.get(f"/v1/agents/{ref}", headers={"X-Alicedev-Token": "tok"})).json()
             assert agent["session_no"] == 1 and agent["reply_spec"]["kinds"] == ["text", "image_template"]
+            assert (await client.get("/v1/sessions/1")).status == 401
+            detail = await (await client.get("/v1/sessions/1", headers={"X-Alicedev-Token": "tok"})).json()
+            assert detail["label"] == "%1" and detail["is_current"] is True
+            assert detail["scenario"]["name"] == "requirement" and detail["state"]["name"] == "discussing"
+            assert detail["state"]["label"] == "对话中" and detail["created_by"] == USER
+            missing = await client.get("/v1/sessions/999", headers={"X-Alicedev-Token": "tok"})
+            assert missing.status == 404 and (await missing.json()) == {"error": "session_unknown"}
             resp = await client.post("/v1/reply", headers={"X-Alicedev-Token": "tok"},
                                      json={"agent": ref, "reply_id": "z", "msgs": [],
                                            "reply": {"kind": "text", "text": "hi"}})

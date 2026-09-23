@@ -33,7 +33,7 @@
 1. **分享视图的上游 paseo 根治（可选）**：首次加载落到 `/open-project` 与重复连接卡住时间线，目前由网关注入的 `paseo-boot.js` 绕开（ARCHITECTURE §8，已验收）。根治需要给 `mouriya-s-lab/paseo` 提 PR：带上旧 fork `6a59f442` 的「不重复探测已持久化的自托管连接」，并让 host 路由等 manifest 探测结束再判断；合入并升级基础镜像后可删除启动脚本。
 2. **needs_human 的分享链接指向已归档的 agent**：进入 human 状态时调度会归档上一个 agent，链接打开后是 `This agent is archived`，时间线为空。重复连接问题已由启动脚本绕开，下一个 needs_human 会话出现时再核对时间线是否因归档而为空。如果需要人能在链接里看到 AI 的过程，契约需要调整：human 状态保留上一个 agent，到结束时再归档。
 3. **`paseo-alicedev` fork**（本机 `~/Ext/code/paseo-alicedev`，分支 `feat/arch-image` `feat/embed-mode` `feat/upgrade-bot-conductor`）已不再使用；是否删除分支或整个仓库由用户决定。
-4. **网关页面 Alice 主题上线**：`feat/alice-theme` 已在本地真浏览器验收（`docs/evidence/alice-theme/`），尚未合入 main、未部署。上线要重建并重启 `gateway` 容器，重启会使所有尚未兑换的一次性链接失效；上线后要在公网域名下重走一遍验收路径。
+4. **网关页面 Alice 主题与会话页上线**：`feat/alice-theme` 已在本地真浏览器验收（`docs/evidence/alice-theme/`），尚未合入 main、未部署。它同时改了 bot（新增 `GET /v1/sessions/{id}`，签发链接时带 `session_id`）和网关（`session_id` 必填，落地页换成会话页）。上线顺序必须先 bot 再网关：旧网关会忽略多出来的 `session_id`，而新网关会拒绝不带它的请求。网关重启会使所有尚未兑换的一次性链接失效；上线后要在公网域名下重走一遍验收路径。
 5. **图片卡片是否改用 Alice 主题**：`templates/cards/` 仍是原来的蓝白样式；如果推广，从 `gateway/static/alice/alice.css` 取 token（ARCHITECTURE §8）。
 
 ## 5. 已知缺口

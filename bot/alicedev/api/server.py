@@ -1,7 +1,8 @@
 """Internal HTTP API server (ARCHITECTURE §6).
 
 Runs inside the plugin process on the docker network (``X-Alicedev-Token``):
-``/v1/reply`` (enqueue), ``/v1/agents/{agent}``, ``/v1/status``, ``/v1/health``,
+``/v1/reply`` (enqueue), ``/v1/agents/{agent}``, ``/v1/sessions/{session_id}``, ``/v1/status``,
+``/v1/health``,
 plus the ``initialize``/``terminate`` draining lifecycle.
 """
 
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable
 from aiohttp import web
 
 from alicedev.dsl.model import AgentState, Registry
+from alicedev.render import views
 
 if TYPE_CHECKING:
     from alicedev.api.intake import ReplyIntake
@@ -68,6 +70,7 @@ class InternalApi:
             [
                 web.post("/v1/reply", self._handle_reply),
                 web.get("/v1/agents/{agent}", self._handle_agent),
+                web.get("/v1/sessions/{session_id}", self._handle_session),
                 web.get("/v1/status", self._handle_status),
                 web.get("/v1/health", self._handle_health),
             ]
@@ -179,6 +182,14 @@ class InternalApi:
                 "reply_spec": reply_spec,
             }
         )
+
+    async def _handle_session(self, request: web.Request) -> web.StreamResponse:
+        raw = request.match_info["session_id"]
+        row = await self._sessions.get(int(raw)) if raw.isdecimal() else None
+        if row is None:
+            return web.json_response({"error": "session_unknown"}, status=404)
+        view = await self._sessions.view(row)
+        return web.json_response(views.session_detail(view, self._scheduler.scenario(row.scenario)))
 
     async def _handle_reply(self, request: web.Request) -> web.StreamResponse:
         try:

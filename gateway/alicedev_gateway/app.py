@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from html import escape
 import json
 import logging
 from pathlib import Path
@@ -14,14 +13,12 @@ from aiohttp import ClientError, ClientSession, ClientTimeout, web
 
 from .config import GatewayConfig
 from .pages import (
-    BotCommand,
-    BotScenario,
-    BotStatus,
     CONFIRM_HEADERS,
     ErrorPageKind,
+    SessionDetail,
     THEMED_HEADERS,
     render_error_page,
-    render_status,
+    render_session_page,
     render_token_preview,
 )
 from .proxy import SELF_HOSTED_MANIFEST, PaseoProxy
@@ -70,7 +67,7 @@ def create_app(config: GatewayConfig) -> web.Application:
     app.router.add_post("/t/{token}", redeem_token)
     app.router.add_post("/internal/tokens", issue_token)
     app.router.add_get("/_alicedev/health", health)
-    app.router.add_get("/_alicedev/", status_page)
+    app.router.add_get("/_alicedev/", session_page)
     app.router.add_get("/_alicedev/r/{report_id}/{basename}", report)
     app.router.add_get("/_alicedev/static/{asset:.+}", static_asset)
     app.router.add_get("/_paseo/hosts.json", self_hosted_manifest)
@@ -177,9 +174,12 @@ async def issue_token(request: web.Request) -> web.Response:
     payload = await _read_json_object(request)
     target = payload.get("target")
     user_key = payload.get("user_key")
+    session_id = payload.get("session_id")
     ttl_value = payload.get("ttl_s")
     if not isinstance(target, str) or not isinstance(user_key, str):
         raise web.HTTPBadRequest(text="target 与 user_key 必须是字符串。\n")
+    if isinstance(session_id, bool) or not isinstance(session_id, int):
+        raise web.HTTPBadRequest(text="session_id 必须是整数。\n")
 
     ttl_s: int | float | None
     if ttl_value is None:
@@ -191,7 +191,7 @@ async def issue_token(request: web.Request) -> web.Response:
 
     tokens: TokenTable = request.app["token_table"]
     try:
-        issued = tokens.issue(target=target, user_key=user_key, ttl_s=ttl_s)
+        issued = tokens.issue(target=target, user_key=user_key, session_id=session_id, ttl_s=ttl_s)
     except ValueError as exc:
         raise web.HTTPBadRequest(text=f"{exc}\n") from exc
 
@@ -227,7 +227,7 @@ async def redeem_token(request: web.Request) -> web.StreamResponse:
 
     codec: SignedCookieCodec = request.app["cookie_codec"]
     response = web.HTTPSeeOther(
-        location=f"/_alicedev/?go={quote(record.target, safe='')}"
+        location=f"/_alicedev/?session={record.session_id}&go={quote(record.target, safe='')}"
     )
     response.set_cookie(
         COOKIE_NAME,
@@ -251,16 +251,15 @@ async def self_hosted_manifest(request: web.Request) -> web.Response:
     return web.json_response(list(SELF_HOSTED_MANIFEST), headers={"Cache-Control": "no-store"})
 
 
-async def status_page(request: web.Request) -> web.Response:
+async def session_page(request: web.Request) -> web.Response:
+    raw_session = request.query.get("session", "")
+    target = request.query.get("go", "")
+    if not raw_session.isdecimal() or not TokenTable.validate_target(target):
+        return _themed_response(404, render_error_page(ErrorPageKind.PATH_MISSING))
     config: GatewayConfig = request.app["gateway_config"]
     session: ClientSession = request.app["http_session"]
-    status = await _fetch_bot_status(session, config)
-    requested_target = request.query.get("go", "")
-    target = requested_target if TokenTable.validate_target(requested_target) else None
-    return _themed_response(
-        200,
-        render_status(status, target),
-    )
+    detail = await _fetch_session(session, config, int(raw_session))
+    return _themed_response(200, render_session_page(detail, target))
 
 
 async def report(request: web.Request) -> web.StreamResponse:
@@ -336,93 +335,56 @@ async def proxy(request: web.Request) -> web.StreamResponse:
     return await paseo.http(request)
 
 
-async def _fetch_bot_status(session: ClientSession, config: GatewayConfig) -> BotStatus:
+async def _fetch_session(
+    session: ClientSession, config: GatewayConfig, session_id: int
+) -> SessionDetail | None:
+    """Bot ``GET /v1/sessions/{id}``; any failure means the page shows no details."""
     try:
         async with session.get(
-            f"{config.bot_upstream}/v1/status",
-            headers={
-                "X-Alicedev-Token": config.internal_token,
-                "Accept-Encoding": "identity",
-            },
+            f"{config.bot_upstream}/v1/sessions/{session_id}",
+            headers={"X-Alicedev-Token": config.internal_token, "Accept-Encoding": "identity"},
             timeout=ClientTimeout(total=5),
         ) as response:
             if response.status != 200:
-                return BotStatus.unavailable(f"bot 返回 HTTP {response.status}")
+                _LOGGER.warning("bot session %s lookup returned HTTP %s", session_id, response.status)
+                return None
             payload = await response.json()
     except (ClientError, asyncio.TimeoutError, json.JSONDecodeError, ValueError) as exc:
-        return BotStatus.unavailable(type(exc).__name__)
-    return _parse_bot_status(payload)
+        _LOGGER.warning("bot session %s lookup failed: %r", session_id, exc)
+        return None
+    detail = _parse_session(payload)
+    if detail is None:
+        _LOGGER.warning("bot session %s lookup returned an unexpected body", session_id)
+    return detail
 
 
-def _parse_bot_status(payload: object) -> BotStatus:
-    if not isinstance(payload, Mapping) or payload.get("ok") is not True:
-        return BotStatus.unavailable("bot 状态不可用")
-    sessions = payload.get("sessions")
-    session_map = sessions if isinstance(sessions, Mapping) else {}
-    return BotStatus(
-        ok=True,
-        generation=_display_value(payload.get("generation")),
-        uptime_s=_display_value(payload.get("uptime_s")),
-        platforms=_string_values(payload.get("platforms")),
-        commands=_command_values(payload.get("commands")),
-        scenarios=_scenario_values(payload.get("scenarios")),
-        active_sessions=_display_value(session_map.get("active")),
-        queued_sessions=_display_value(session_map.get("queued")),
-    )
+def _parse_session(payload: object) -> SessionDetail | None:
+    if not isinstance(payload, Mapping):
+        return None
+    scenario = payload.get("scenario")
+    state = payload.get("state")
+    if not isinstance(scenario, Mapping) or not isinstance(state, Mapping):
+        return None
+    strings = {
+        "label": payload.get("label"),
+        "name": payload.get("name"),
+        "scenario_name": scenario.get("name"),
+        "scenario_description": scenario.get("description"),
+        "state_label": state.get("label"),
+        "created_by": payload.get("created_by"),
+        "created_at": payload.get("created_at"),
+    }
+    last_activity_at = payload.get("last_activity_at")
+    is_current = payload.get("is_current")
+    if (
+        not all(isinstance(value, str) for value in strings.values())
+        or not (last_activity_at is None or isinstance(last_activity_at, str))
+        or not isinstance(is_current, bool)
+    ):
+        return None
+    return SessionDetail(**strings, last_activity_at=last_activity_at, is_current=is_current)
 
 
-def _command_values(value: object) -> tuple[BotCommand, ...]:
-    if not isinstance(value, list):
-        return ()
-    result: list[BotCommand] = []
-    for item in value:
-        if isinstance(item, str):
-            result.append(BotCommand(name=item, description=""))
-        elif isinstance(item, Mapping):
-            name = item.get("name")
-            if isinstance(name, str) and name:
-                description = item.get("description")
-                result.append(
-                    BotCommand(
-                        name=name,
-                        description=description if isinstance(description, str) else "",
-                    )
-                )
-    return tuple(result)
-
-
-def _scenario_values(value: object) -> tuple[BotScenario, ...]:
-    if not isinstance(value, list):
-        return ()
-    result: list[BotScenario] = []
-    for item in value:
-        if isinstance(item, str):
-            result.append(BotScenario(name=item, description=""))
-        elif isinstance(item, Mapping):
-            name = item.get("name")
-            if isinstance(name, str) and name:
-                description = item.get("description")
-                result.append(
-                    BotScenario(
-                        name=name,
-                        description=description if isinstance(description, str) else "",
-                    )
-                )
-    return tuple(result)
-
-
-def _string_values(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str))
-
-
-def _display_value(value: object) -> str:
-    if value is None:
-        return "—"
-    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-        return escape(str(value))
-    return "—"
 
 def _public_scheme(config: GatewayConfig) -> str:
     hostname = urlsplit(f"//{config.public_host}").hostname
