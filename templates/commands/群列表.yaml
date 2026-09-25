@@ -1,0 +1,11 @@
+# bot 有会话的群，以及 allowed_chats 里的群：未结束会话数与最近活动。
+name: 群列表
+type: program
+aliases: [chats]
+summary: 查看 bot 所在的群与各群的会话情况
+usage: /群列表
+examples:
+  - /群列表
+permission: admin
+do:
+  chats:

@@ -7,7 +7,7 @@ Each builder returns ``(card_name, fields)``; the runtime hands them to
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 from alicedev.domain import FavoriteView, SessionView
 from alicedev.dsl.model import (
@@ -30,7 +30,13 @@ from alicedev.dsl.model import (
     QUEUED,
 )
 
+if TYPE_CHECKING:
+    from alicedev.status import BotStatus
+    from alicedev.store.sessions_repo import KnownChat
+
+
 Card = tuple[str, dict[str, Any]]
+_STATUS_ERROR_LIMIT = 3
 
 _PERMISSION_LABELS = {
     Permission.ALL: "所有人",
@@ -58,6 +64,22 @@ _BUILTIN_LABELS = {
 
 def _time(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M") if value is not None else ""
+
+
+def _uptime(seconds: int) -> str:
+    days, remainder = divmod(seconds, 86_400)
+    hours, remainder = divmod(remainder, 3_600)
+    minutes, seconds = divmod(remainder, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}天")
+    if hours or days:
+        parts.append(f"{hours}小时")
+    if minutes or hours or days:
+        parts.append(f"{minutes}分钟")
+    if seconds or not parts:
+        parts.append(f"{seconds}秒")
+    return " ".join(parts)
 
 
 def _footer(command: str, page: int, pages: int) -> str:
@@ -325,8 +347,71 @@ def favorites_list_card(
     return "favorites_list", fields
 
 
+def status_card(status: BotStatus) -> Card:
+    shown_errors = status.dsl_errors[:_STATUS_ERROR_LIMIT]
+    fields = {
+        "title": "机器人状态",
+        "generation": status.generation,
+        "revision": status.revision[:7],
+        "uptime": _uptime(status.uptime_s),
+        "platforms": list(status.platforms),
+        "commands_count": len(status.commands),
+        "scenarios_count": len(status.scenarios),
+        "sessions_active": status.sessions["active"],
+        "sessions_queued": status.sessions["queued"],
+        "agents": [
+            {"status": agent_status, "count": count}
+            for agent_status, count in sorted(status.agents.items())
+        ],
+        "outbox_pending": status.outbox_pending,
+        "dsl_error_count": len(status.dsl_errors),
+        "dsl_errors": [
+            {
+                "path": error["path"],
+                "line": error["line"],
+                "message": error["message"],
+            }
+            for error in shown_errors
+        ],
+        "dsl_errors_remaining": len(status.dsl_errors) - len(shown_errors),
+    }
+    return "bot_status", fields
+
+
 # ``list`` action card name -> builder for session rows (favorites are separate).
 SESSION_LIST_CARDS: Mapping[str, Callable[..., Card]] = {
     "session_list": session_list_card,
     "requirements_list": requirements_list_card,
 }
+
+
+def chats_card(chats: list[KnownChat], allowed: tuple[str, ...]) -> Card:
+    rows: dict[str, tuple[str, int, datetime | None]] = {
+        chat.chat_key: (chat.name, chat.open_sessions, chat.last_activity_at)
+        for chat in chats
+    }
+    for chat_key in allowed:
+        rows.setdefault(chat_key, ("", 0, None))
+
+    ordered = sorted(
+        rows.items(),
+        key=lambda item: (
+            item[1][2] is not None,
+            item[1][2] or datetime.min,
+        ),
+        reverse=True,
+    )
+    fields = {
+        "title": "群列表",
+        "subtitle": "bot 有会话的群与已配置允许访问的群",
+        "rows": [
+            {
+                "chat_key": chat_key,
+                "name": "" if name == chat_key else name,  # private chats record the key as their name
+                "open_sessions": open_sessions,
+                "last_activity_at": _time(last_activity_at),
+            }
+            for chat_key, (name, open_sessions, last_activity_at) in ordered
+        ],
+    }
+    return "chats_list", fields

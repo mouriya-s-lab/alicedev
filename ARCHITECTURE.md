@@ -4,14 +4,14 @@
 
 ## 0. 一句话
 
-AstrBot 插件把群聊指令分成两类：**程序指令**由 bot 自己完成（会话管理、收藏、列表、帮助、分享、审批）；**AI 指令**把 prompt 交给 paseo 里的 AI，要么新开一个**会话**，要么发到已有会话（`%n` 指定，不指定就发到本群当前会话）。每个会话是某个**场景**的实例：最简单的场景只有一个对话态（`/需求`、`/帮我调查`、`/解读`），复杂的场景带挂钩仓库、worktree 和多状态（`/升级bot`：AI 迭代 bot 自身，经人批准后上线），两者共用一套抽象。会话里的 AI 通过回复把消息写进 bot 的出站队列，bot 从队列发回群。指令、消息路由、场景和用户可见的固定文字全部写在人类友好的 YAML DSL 里，可直接渲染成图片卡片。网关用一次性 token 分享 paseo 面板并公开渲染报告。
+AstrBot 插件把群聊指令分成两类：**程序指令**由 bot 自己完成（会话管理、收藏、列表、帮助、分享、审批）；**AI 指令**把 prompt 交给 paseo 里的 AI，要么新开一个**会话**，要么发到已有会话（`%n` 指定，不指定就发到本群当前会话）。每个会话是某个**场景**的实例：最简单的场景只有一个对话态（`/需求`、`/帮我调查`、`/解读`），复杂的场景带挂钩仓库、worktree 和多状态（`/升级bot`：AI 迭代 bot 自身，经人批准后上线），两者共用一套抽象。会话里的 AI 通过回复把消息写进 bot 的出站队列，bot 从队列发回群；AI 也能调用它所在状态允许的指令（如 `/需求`、`/收藏`），由 bot 代会话创建者执行。**管家**（`/管家`）是管理员专用的会话，负责分诊、指派研究和查看全局会话（§13.3）。指令、消息路由、场景和用户可见的固定文字全部写在人类友好的 YAML DSL 里，可直接渲染成图片卡片。网关用一次性 token 分享 paseo 面板并公开渲染报告。
 
 **五条不变量（违背即错）**
 1. **monorepo**：alicedev 的全部代码（bot、调度、DSL、shim、e2e 基建、部署）只在本仓库。paseo 按上游原样使用：不 fork、不改源码，alicedev 只在其外面叠加运行配置（harness 产物、provider 配置）。
 2. **paseo daemon 是不可修改的已部署基础设施，只是一个 daemon**：被动响应，从不主动推进流程，用 RPC 驱动各 harness（omp / pi / claude / codex…）。
    - **bot → daemon 的唯一接触面是 paseo CLI**（全部 `--json`），bot 经 `paseoctl` shim 跨容器调用；**禁止 MCP、禁止 WS、禁止自写 daemon 协议客户端**。
-   - **agent → bot 的唯一通道是回复**：`alicedev-reply` → `POST /v1/reply`（§6）。bot 不读 agent transcript、不解析模型自由文本。
-   - agent 里的 AI 是执行者：**不碰 paseo CLI、不起 agent、不推进流程**。会话状态由 AI 在回复里用结构化字段 `transition` 报告，由 bot 调度校验并推进（§7）。
+   - **agent → bot 的唯一通道是 `alicedev` CLI → bot 内部 API**：`alicedev reply` → `POST /v1/reply` 回复群聊、报告 `transition`（§6）；`alicedev run` → `POST /v1/commands` 执行本状态允许的指令（§6.1）。bot 不读 agent transcript、不解析模型自由文本。
+   - agent 里的 AI 是执行者：**不碰 paseo CLI、不起 agent、不推进流程**。会话状态由 AI 在回复里用结构化字段 `transition` 报告，由 bot 调度校验并推进（§7）；AI 经 `alicedev run` 开的会话同样由 bot 调度派发。
 3. **bot 侧三个独立职责**：
    - **传输**：入站把平台消息交给指令或路由；出站是消息队列，AI 与 bot 自己入队，平台适配器出队发送，入队与出队互不等待（§6）。
    - **调度**：会话状态机，按场景定义起 agent、推进状态；声明独占的场景一次只处理一个会话（§7）。
@@ -42,7 +42,7 @@ flowchart LR
   gw -->|cookie 校验后反代 http+ws<br/>注入分享视图样式| paseo
   gw -->|GET /v1/sessions/{id}| astr
   astr -->|paseoctl → docker exec → paseo CLI --json| paseo
-  paseo -->|agent 内 alicedev-reply → POST /v1/reply| astr
+  paseo -->|agent 内 alicedev CLI → POST /v1/reply、/v1/commands| astr
   astr -->|html_render| t2i
   astr -->|POST /internal/tokens| gw
   paseo -.->|agent 经 pi-unified-exec| e2e
@@ -58,7 +58,8 @@ flowchart LR
 | `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入与分享视图样式注入）、报告 md 渲染、会话页 |
 | `paseo` | TS | **不可修改的已部署服务**，上游原样。agent 运行时 |
 | `harness/omp-extension` | TS | `/chat_ingress` 命令、`chat_reply` 工具、`session_stop` 提醒（§5） |
-| `harness/reply-cli` | TS（node 单文件，零依赖） | `alicedev-reply`：POST `/v1/reply`，带重试 |
+| `harness/cli` | JS（node 单文件，零依赖） | `alicedev` CLI：`reply` → `POST /v1/reply`，`commands` / `run` → `/v1/commands`；带重试（§6、§6.1） |
+| `harness/skills/alicedev` | Markdown | skill：agent 怎么发现并调用指令；随 omp 扩展一起装进 paseo 镜像（§6.1） |
 | `e2e` | 专用镜像（astrbot + t2i + webchat） | 供 agent 使用的测试场；怎么用由场景 prompt 决定；内部不跑 pi，不是第二个 daemon |
 | `tg-cli` | kabi-tg-cli + Telethon | 供 agent 使用的真实 Telegram 收发与取图 |
 | `t2i`、`caddy` | 官方镜像 | HTML→PNG；ACME TLS |
@@ -154,20 +155,24 @@ do:
 
 **动作**（封闭集合；每个动作有固定的结果键，回话取 `say` 覆盖或 `messages.yaml` 默认）：
 
-| 类型 | 动作 | 参数 | 结果键 |
-|---|---|---|---|
-| ai | `start` | `scenario`、`text` | `created`、`queued`、`failed` |
-| ai | `github` | `ref`、`scenarios: { issue, pr }` | `created`、`fetch_failed`、`failed` |
-| ai | `send` | `session`、`text` | `ok`、`not_found`、`not_conversational`、`busy` |
-| program | `session_show` | `session` | 会话卡（§3.5） |
-| program | `session_switch` | `session` | `ok`、`not_found` |
-| program | `session_rename` | `session`、`name` | `ok`、`not_found` |
-| program | `session_archive` | `session` | `ok`、`not_found` |
-| program | `human` | `session`、`command` | `ok`、`not_found`、`not_allowed` |
-| program | `share` | `session`、`to`（mentions，缺省发起人） | `ok`、`not_found`、`not_ready` |
-| program | `favorite` | `quoted` | `ok`、`image_failed` |
-| program | `list` | `source: sessions \| favorites`、`scenario?`、`archived?`、`card`、`page` | 卡片图 |
-| program | `help` | `command?` | 帮助卡或指令卡（§3.5） |
+| 类型 | 动作 | 参数 | 结果键 | agent 可调用 |
+|---|---|---|---|---|
+| ai | `start` | `scenario`、`text` | `created`、`queued`、`failed`；`one_per_chat` 场景另有 `sent`、`busy`（§3.4） | 是 |
+| ai | `github` | `ref`、`scenarios: { issue, pr }` | `created`、`fetch_failed`、`failed` | 是 |
+| ai | `send` | `session`、`text` | `ok`、`not_found`、`not_conversational`、`busy` | 否 |
+| program | `session_show` | `session` | 会话卡（§3.5） | 是 |
+| program | `session_switch` | `session` | `ok`、`not_found` | 否 |
+| program | `session_rename` | `session`、`name` | `ok`、`not_found` | 是 |
+| program | `session_archive` | `session` | `ok`、`not_found` | 是 |
+| program | `human` | `session`、`command` | `ok`、`not_found`、`not_allowed` | 否 |
+| program | `share` | `session`、`to`（mentions，缺省发起人） | `ok`、`not_found`、`not_ready` | 否 |
+| program | `favorite` | `quoted` | `ok`、`image_failed` | 是 |
+| program | `list` | `source: sessions \| favorites`、`scenario?`、`archived?`、`card`、`page` | 卡片图 | 是 |
+| program | `chats` | — | 群列表卡：bot 有会话的群与 `allowed_chats` 里的群，各自未结束会话数与最近活动 | 是 |
+| program | `status` | — | 状态卡：版本、平台、会话与 agent 计数、DSL 错误、待发消息数（与 `/v1/status` 同源） | 是 |
+| program | `help` | `command?` | 帮助卡或指令卡（§3.5） | 否 |
+
+「agent 可调用」决定一条指令能否出现在场景状态的 `agent_commands` 里（§3.4、§6.1）。不可调用的理由：`send` 会让 agent 之间互相注入、等待彼此空闲；`session_switch` 改的是群里人的当前会话；`human`（approve / reject）是上线闸门，`share` 签出的链接能用整个 paseo 面板，两者只给人；`help` 是给人看的卡片，agent 用 `alicedev commands`。
 
 一个指令可以带子指令（如 `/升级bot approve [%会话]`）：`subcommands:` 下每项是一份同结构的指令声明，`name` 为子指令词，可与父指令类型不同。
 
@@ -232,9 +237,14 @@ states:
 **字段**
 - `cwd` 与 `repo` 二选一：`cwd` = agent 直接在该目录工作；`repo` = 派发时对齐 fixed-main 并为会话建 worktree，结束时归档。
 - `exclusive`：默认 `false`，会话创建即派发；`true` 时同场景最多一个未结束会话，其余 `queued`。
+- `one_per_chat`：默认 `false`；`true` 时每个群最多一个该场景的未结束会话：`start` 发现本群已有一个，就不新开，把文本发给它（结果键 `sent`，它正忙则 `busy`）。查找与新建在同一次 Store 临界区内完成，并发的两条 `start` 不会各建一个。不能与 `exclusive` 同用（后者会把所有群串成一个队列）。
+- `audience`：`all`（默认）或 `admin`。`admin` 场景：
+  - 启动它的指令必须是 `permission: admin`，路由不得启动它；
+  - 它的会话只接收管理员的输入：`send` 的所有入口（`/继续`、@bot 或私聊的自然消息、引用它的消息）都检查发送者，非管理员不回、记日志；
+  - 只有它的 `agent_commands` 能列 admin 权限的指令，也只有它的 agent 能用 `--chat` 操作别的群（§6.1）。
 
 **状态 `kind`**
-- `agent`：进入时在会话工作目录起一个新 agent，首轮 prompt 为该状态模板的渲染结果。带 `reply` 的是**对话态**：AI 的回复按 `reply` 规格进聊天面，群友可以继续对话（`send`），`transition` 可选；不带 `reply` 的是**内部态**：不进聊天面、不接受 `send`，AI 只能报告 `transition`。`next` 列出可报告的目标状态，缺省为空（单对话态场景就是如此）。
+- `agent`：进入时在会话工作目录起一个新 agent，首轮 prompt 为该状态模板的渲染结果。带 `reply` 的是**对话态**：AI 的回复按 `reply` 规格进聊天面，群友可以继续对话（`send`），`transition` 可选；不带 `reply` 的是**内部态**：不进聊天面、不接受 `send`，AI 只能报告 `transition`。`next` 列出可报告的目标状态，缺省为空（单对话态场景就是如此）。`agent_commands` 列出这个 agent 能经 `alicedev run` 调用的指令路径（指令名，或 `父指令 子指令`，别名不算），缺省为空；每条路径的动作必须是「agent 可调用」的（§3.2），admin 权限的指令只能出现在 `audience: admin` 的场景里。加载时逐条校验：指向不存在的指令或违反上述规则时拒绝该场景文件；指向的指令文件自身因错误被拒绝时，只是这一条暂不可用，场景照常加载（一条坏指令不连带拖垮列出它的所有场景）。
 - `human`：等待人工指令，`commands` 把人工指令名映射到目标状态（群里怎么发由指令 DSL 的 `human` 动作决定）；可见。
 - `terminal`：会话结束，可见；进入时停掉 agent、有 worktree 则归档、释放独占。
 
@@ -244,7 +254,7 @@ states:
 
 **内建状态**（所有场景共有）：`queued`（等待派发）、`main_sync_failed`（terminal，`share: true`，派发时 fixed-main 对齐失败，仅 `repo` 场景）、`failed`（terminal，进入某个 agent 状态时 agent 创建失败，附原因）、`archived`（terminal，`session_archive` 从任意未结束状态进入）。
 
-**prompt 变量**：`text`、`sender{id,name}`、`chat{key,name}`、`quoted{sender,text,images[]}`、`images[]`、`github{kind,owner,repo,number,title,body,labels[],state,url}`、`session{no,name}`、`reports_dir`（该会话的报告目录 `REPORTS_ROOT/s<session_id>/`）、`repo{fixed_main,worktree,branch,base_sha}`（仅 `repo` 场景）、`data`、`state`、`next[]`、`agent_ref`。prompt 里包含 system 段（`paseo run` 没有 systemPrompt 参数，omp 的 system prompt 由用户自管）。bot 在渲染结果末尾追加「回复方式」段：本状态 `reply` 规格、允许的 `next` 与各目标要求的 `data`、`chat_reply` 用法、长内容走 image_template。
+**prompt 变量**：`text`、`sender{id,name}`、`chat{key,name}`、`quoted{sender,text,images[]}`、`images[]`、`github{kind,owner,repo,number,title,body,labels[],state,url}`、`session{no,name}`、`reports_dir`（该会话的报告目录 `REPORTS_ROOT/s<session_id>/`）、`repo{fixed_main,worktree,branch,base_sha}`（仅 `repo` 场景）、`data`、`state`、`next[]`、`agent_ref`。prompt 里包含 system 段（`paseo run` 没有 systemPrompt 参数，omp 的 system prompt 由用户自管）。bot 在渲染结果末尾追加「回复方式」段：本状态 `reply` 规格、允许的 `next` 与各目标要求的 `data`、`chat_reply` 用法、长内容走 image_template；状态有 `agent_commands` 时再追加「可用指令」段：本 agent 的 `agent_ref`、每条可用指令的 `usage` 与说明，并指向 skill `alicedev`。
 
 ### 3.5 校验与图片渲染
 
@@ -305,10 +315,10 @@ omp 在 rpc/rpc-ui 下**不触发** `input` 事件（`oh-my-pi/.../types.ts:908`
 扩展 `harness/omp-extension`（核心逻辑在 `harness/core`，无 harness 依赖）：
 
 1. `pi.registerCommand("chat_ingress")`：解析 JSON → `pending.push({agent,msg,text})` → `pi.appendEntry("alicedev.pending", {agent,msg})` → `pi.sendUserMessage(text)`。模型只看到 `text`。
-2. `pi.registerTool("chat_reply")`：参数 = `{ reply?: ReplyPayload; transition?: Transition }`（§6）。执行：生成/复用 `reply_id`；`pi.exec("alicedev-reply", ["--agent", a, "--reply-id", id, "--msgs", "m1,m2", "--json", payload])`；退出码 0 且 stdout `{"status":"queued"|"replayed"}` → 把**当前全部 pending** 标记 consumed（`appendEntry("alicedev.consumed", {msgs, reply_id})`），返回成功；非 0 → 把 stderr 原样返回给模型，pending 不变。consumed = bot 已入队，与平台是否已发出无关。一条回复覆盖此前收到的所有消息（聊天语义）。
+2. `pi.registerTool("chat_reply")`：参数 = `{ reply?: ReplyPayload; transition?: Transition }`（§6）。执行：生成/复用 `reply_id`；`pi.exec("alicedev", ["reply", "--agent", a, "--reply-id", id, "--msgs", "m1,m2", "--json", payload])`；退出码 0 且 stdout `{"status":"queued"|"replayed"}` → 把**当前全部 pending** 标记 consumed（`appendEntry("alicedev.consumed", {msgs, reply_id})`），返回成功；非 0 → 把 stderr 原样返回给模型，pending 不变。consumed = bot 已入队，与平台是否已发出无关。一条回复覆盖此前收到的所有消息（聊天语义）。
 3. `pi.on("session_stop")`：若 `event.signal.aborted` 或 ctx 正在关闭 → 不干预。否则若 pending 非空且尚未对当前 pending 集合提醒过（`appendEntry("alicedev.reminded", {msgs})` 持久化）→ 返回 `{continue:true, additionalContext}`，内容为固定模板 + JSON 编码的原文。同一 pending 集合只提醒一次。
 4. `session_start`：扫 `getBranch()` 重建 pending/consumed/reminded。
-5. 加载方式：paseo custom provider `omp-alicedev`：`{extends:"omp", command:["omp","-e","/opt/alicedev/omp-extension"]}`（replace 模式，argv[0] 必须是 omp；`provider-registry.ts:833-862`，`omp/runtime.ts:83-88`）。
+5. 加载方式：paseo custom provider `omp-alicedev`：`{extends:"omp", command:["omp","-e","/opt/alicedev/omp-extension"]}`（replace 模式，argv[0] 必须是 omp；`provider-registry.ts:833-862`，`omp/runtime.ts:83-88`）。omp 同时发现扩展目录下的 `skills/<name>/SKILL.md`，skill `alicedev` 由此装载（§6.1）。
 
 ## 6. 消息：入队 API 与出队（`http://astrbot:6200`，头 `X-Alicedev-Token`）
 
@@ -336,7 +346,7 @@ GET  /v1/sessions/{session_id} → 200 { label: "%n", name, scenario: { name, de
   → 404 { error: session_unknown }
 GET  /v1/status → { ok, generation, uptime_s, platforms[], commands[], scenarios[], dsl_errors[],
                     sessions:{active, queued}, agents:{active, closed} }
-GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重连探测；revision = bot/REVISION（deployrun 写入），缺失为 "unknown"
+GET  /v1/health → 200 { generation, revision }   // 免鉴权；alicedev CLI 重连探测；revision = bot/REVISION（deployrun 写入），缺失为 "unknown"
 ```
 
 **入队规则**（agent 所属会话的当前状态必须仍是该 agent 服务的状态，否则 409 `agent_not_current`；`reply` 与 `transition` 至少带一个，否则 `invalid_payload`）
@@ -350,15 +360,75 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重�
 
 **出队**：outbox worker 按 `chat_key` 先进先出取 `queued` 行 → 渲染（长文本转卡片、`image_template` 经 t2i；AI 的消息带会话标记 `%n 名称`，文字消息为前缀、卡片为角标，让群友知道是哪个会话、回复时该指哪个）→ 平台适配器发送 → 平台返回消息 id 时写 `outbound(platform_message_id → session_id)` → 标记 `sent`；发送失败标记 `failed` 并按退避重试。bot 重启或插件重载后继续消费未出队的行。出队至少一次：发送成功后、写 `sent` 前崩溃会重发。程序指令与调度自己的回话也以同样的行入队。
 
-**插件生命周期**：`initialize()`：加载并校验 DSL → 打开 Store（一次）→ 启动 aiohttp `TCPSite`（`reuse_port`）→ 启动 sweeper、outbox worker、调度（从 DuckDB 恢复未结束会话）；`generation` 自增。`terminate()`：标记 draining（`/v1/*` 返回 503）→ 等待在途请求 ≤10s → 取消并等待后台任务 → 关站 → 关 Store。插件热重载 = `terminate()` + 新代码 `initialize()`；AstrBot 重载只清 `data.plugins.alicedev*` 的模块缓存，插件入口在导入前自行清掉插件自带的 `alicedev` 包，否则重载后仍跑旧代码。reply-cli 遇 503/连接拒绝按 1,2,4,8s 重试至 30s。
+**插件生命周期**：`initialize()`：加载并校验 DSL → 打开 Store（一次）→ 启动 aiohttp `TCPSite`（`reuse_port`）→ 启动 sweeper、outbox worker、调度（从 DuckDB 恢复未结束会话）；`generation` 自增。`terminate()`：标记 draining（`/v1/*` 返回 503）→ 等待在途请求 ≤10s → 取消并等待后台任务 → 关站 → 关 Store。插件热重载 = `terminate()` + 新代码 `initialize()`；AstrBot 重载只清 `data.plugins.alicedev*` 的模块缓存，插件入口在导入前自行清掉插件自带的 `alicedev` 包，否则重载后仍跑旧代码。`alicedev` CLI 遇 503/连接拒绝按 1,2,4,8s 退避重试，`reply` 与 `commands` 的总预算 30s，`run` 120s（`start` 同步派发，§7）。
+
+### 6.1 agent 调用指令（`alicedev run`）
+
+agent 调用的就是 `templates/commands/` 里的指令：同一份 DSL、同一套解析与权限、同一个动作实现，没有另一套工具注册表。能调用哪些由所在状态的 `agent_commands` 决定（§3.4）。
+
+```ts
+GET  /v1/commands?agent=<agent_ref>
+  → 200 { agent, session_no, chat_key, audience: "all" | "admin",
+          commands: [{ path, usage, summary, examples: string[], permission }] }   // 只列本状态的 agent_commands
+  → 404 { error: agent_unknown }   → 409 { error: agent_not_current }
+
+POST /v1/commands { agent; call_id; text; chat?: string; quote?: string }
+  // text：一行指令，与群里的写法相同，如 "/需求 支持中文界面"、"/会话 %3"
+  // chat：目标群 chat_key，缺省为调用者会话所在的群；quote：给 quoted 参数用的消息 id
+  → 200 { result; message?: string; data?: object }
+  → 400 { error: invalid_payload | unknown_command | usage_error; message? }
+  → 403 { error: command_not_allowed | permission_denied | chat_not_allowed | nested_assignment | self_archive }
+  → 404 { error: agent_unknown | quote_not_found }
+  → 409 { error: agent_not_current }
+```
+
+**校验顺序**
+1. agent：`agents` 有这一行，所属会话的当前状态是它服务的 agent 状态，且它就是该状态最新的 agent（同名状态再次进入后，旧 agent 失效），否则 `agent_not_current`。
+2. 指令：按聊天同样的规则匹配指令与子指令（`unknown_command`），匹配到的路径必须在本状态的 `agent_commands` 里（`command_not_allowed`），再按 `usage` 解析参数（`usage_error`，`message` 为原因）。
+3. **代表谁（principal）**：会话创建者 `sessions.created_by`，名字取会话触发时的 `sender.name`。指令 `permission: admin` 要求 principal 是管理员；`owner` 要求 principal 是管理员或目标会话的创建者；不满足为 `permission_denied`。`audience: admin` 的会话只能由管理员创建、只接收管理员输入（§3.4），所以 principal 必是管理员。
+4. **目标群**：缺省为调用者会话的群；带 `chat` 时调用者场景必须是 `audience: admin`，且目标群通过 `allowed_chats`，否则 `chat_not_allowed`。`%n`、列表、收藏都在目标群里解析。agent 调用的 `session` 参数必须写明 `%n`：没有「被引用消息」和「当前会话」可以回退，省略即 `usage_error`。
+5. **引用**：`quoted` 参数取 `quote`。`m_…` 是目标群某个会话收到的群友消息，其余是该群某个会话发出的 AI 回复（`reply_id`）；两者 id 都来自 `/会话 %n` 返回的 `recent`。不在目标群内为 `quote_not_found`。
+
+**执行与结果**
+- 动作与人发指令时相同，结果键即 `result`。
+- 结果是文字回话的（开会话、收藏、归档、重命名），回话照常发到目标群留痕，同时作为 `message` 返回；`data` 带会话 `{no, name, state, scenario}` 或收藏 `{id}`。
+- 结果是卡片的（会话、列表、群列表、状态），卡片**不发群**，卡片数据作为 `data` 返回。`/会话 %n` 另带 `recent`：该会话最近 10 条往来，从旧到新，每条 `{id, kind: "human" | "ai", author, text, images, at}`。`text` 截断到 500 字；群友消息取平台原文，AI 回复取可读文本（文字、卡片的标题与正文、图片数量、报告链接）。
+- 回话静默的结果（如重复调用）只返回 `result`。
+
+**agent 开的会话**（`start` / `github`）
+- 触发者为 principal，`chat` 为目标群（群名取 bot 在该群最近一次记录的名字），无引用、无图片；`sessions.assigned_by` 记调用者的会话。
+- **不改目标群的当前会话**：群里的人正在和谁说话，不因为 agent 开了个会话而变。
+- `assigned_by` 非空的会话，它的 agent 不能再开会话（`nested_assignment`），指派最多一层。
+- `assigned_by` 只是来源记录：父会话结束不影响子会话，子会话的回复不推给父会话。
+
+**其他限制**：agent 不能归档自己所在的会话（`self_archive`）。
+
+**幂等**：`call_id` 由 CLI 每次调用生成一次，传输重试时复用；需要时可用 `--call-id` 指定。有副作用的动作靠各自的记录去重，不另建调用表：
+- `start` 以 `call:<call_id>` 作为触发消息的平台 id，重试命中后返回当初建的会话；
+- `favorite` 把 `call:<call_id>` 记在收藏的 `platform_message_id`，重试返回当初的收藏 id；
+- 重命名、归档本身幂等，其余动作只读。
+
+**威胁模型**：所有 agent 在同一个 paseo 容器、同一 uid、同一个内部 token 下运行，容器挂着 docker.sock。`agent_ref` 只是定位符，不是凭据；以上校验防的是误操作和越权的默认路径，不是安全边界。`github-issue` / `github-pr` 会话读的是外部正文，它们只拿到 `all` 权限的指令；管家经 `/会话` 读到的其他会话内容一律当作不可信材料。
+
+**CLI**（`harness/cli`，装在 paseo 镜像的 `/usr/local/bin/alicedev`；环境 `ALICEDEV_INTERNAL_API`、`ALICEDEV_INTERNAL_TOKEN`）
+
+```
+alicedev reply    --agent <ref> --reply-id <uuid> --msgs m1,m2 --json '<payload>'   # chat_reply 用（§5）
+alicedev commands --agent <ref>                                                     # 列出可用指令
+alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <id>] '<指令行>'
+```
+
+退出码：0 成功，stdout 为响应 JSON；1 被 bot 拒绝或重试预算用完，stderr 为错误 JSON；2 参数错误。
+
+**skill `alicedev`**（`harness/skills/alicedev/SKILL.md`，构建时放进 `/opt/alicedev/omp-extension/skills/alicedev/`）：什么时候该调用指令、怎样用 `alicedev commands` 发现、调用格式、结果与错误怎么处理、哪些事不要做。skill 不抄指令清单，清单只来自 DSL；它随 paseo 镜像发布，内容变化需要重建镜像。
 
 ## 7. 调度：会话状态机
 
-- **新开会话**：AI 指令或路由的 `start` / `github` 动作 → 分配本群下一个会话号 `%n`，建会话（名称由场景 `title` 渲染）→ 设为本群当前会话 → 派发 → 按结果键回话（`created` / `queued` / `failed`）；派发落到 `main_sync_failed` 时它的状态消息（带链接）就是回话，不再按 `failed` 回。入站以 `(chat_key, platform_message_id)` 去重，平台重投不重复建会话。
+- **新开会话**：AI 指令、路由或 agent（§6.1）的 `start` / `github` 动作 → 持 Store 锁：按 `(chat_key, platform_message_id)` 去重（平台重投、CLI 重试不重复建会话）→ `one_per_chat` 场景本群已有未结束会话则不新建，把文本发给它（结果 `sent` / `busy`）→ 否则分配本群下一个会话号 `%n`，建会话（名称由场景 `title` 渲染，agent 开的记 `assigned_by`）→ 人开的会话设为本群当前会话，agent 开的不改 → 释放锁 → 派发 → 按结果键回话（`created` / `queued` / `failed`）；派发落到 `main_sync_failed` 时它的状态消息（带链接）就是回话，不再按 `failed` 回。
 - **派发**：非独占场景立即派发；独占场景在同场景已有未结束会话时保持 `queued`，前一个结束后按创建顺序派发。`repo` 场景派发时先 `mainsync align --repo <fixed_main>`（在 paseo 容器内 `git fetch` + fast-forward），非 ff / 脏 / 冲突 → `workspace_register(<fixed_main>)`（已登记则复用），workspace_id 记入该会话 → `main_sync_failed`（按 `share: true` 附链接，人手动清理）；成功则 `worktree_create(<fixed_main>, <base>, s<session_id>)`，记录 `workspace_id`、worktree 路径、`base_sha`。然后进入 `initial`。
 - **进入 agent 状态**：在会话工作目录起 agent（`provider` 取场景，原样传给 `--provider`，如 `omp-alicedev/opencode-go/muse-spark-1.3-contributor`；`cwd` 场景用会话的 local workspace，`repo` 场景用会话 worktree，均带 `--workspace`），首轮 = `/chat_ingress` 包裹的状态 prompt；写 `agents(session_id, state)`。
-- **发到已有会话**（`send`）：目标会话 = 显式 `%n` > 被引用消息所属会话 > 本群当前会话。被引用消息所属会话按 `outbound` 查；AstrBot 主动发送拿不到平台消息 id 时，按被引用消息首行的会话标记 `%n` 解析 → 必须处于对话态 → 注入该状态的 agent（§4 注入）→ 设为本群当前会话；否则按结果键回话。
-- **当前会话**：每群一个指针（`chat_current_sessions`）。新开会话、`send` 到某会话、`/切换` 都会改它；当前会话结束时指针清空。
+- **发到已有会话**（`send`）：目标会话 = 显式 `%n` > 被引用消息所属会话 > 本群当前会话。被引用消息所属会话按 `outbound` 查；AstrBot 主动发送拿不到平台消息 id 时，按被引用消息首行的会话标记 `%n` 解析 → 目标场景是 `audience: admin` 而发送者不是管理员则不回、记日志 → 必须处于对话态 → 注入该状态的 agent（§4 注入）→ 设为本群当前会话；否则按结果键回话。
+- **当前会话**：每群一个指针（`chat_current_sessions`）。人新开会话、`send` 到某会话、`/切换` 都会改它；agent 开的会话不改；当前会话结束时指针清空。
 - **推进**：agent 状态之间只由当前 agent 回复里的 `transition` 推进（§6）；AI 停下而未回复时由 §5.3 的提醒兜底。调度不读 agent 内容、不解析自由文本、不用 `wait`/`inspect` 判断阶段是否完成。human 状态由 `human` 动作推进。
 - **结束**：进入 terminal → 停掉并归档 agent → 有 worktree 则 `worktree_archive` → 释放独占并派发同场景下一个会话 → 若是本群当前会话则清空指针。会话号不复用。
 - **恢复**：会话与 agent 状态全部在 DuckDB。bot 重启或插件重载后，调度恢复未结束会话，不重起已存在的 agent；agent 在 paseo 里照常运行，回复在 bot 恢复后照常入队。bot 起不来时 paseo 仍在，人经 paseo 面板让 AI 修复。
@@ -394,7 +464,7 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；reply-cli 重�
 
 配置（`bot/_conf_schema.json`）：`allowed_chats: string[]`（chat_key 白名单；空 = 全部允许）、`admin_users: string[]`（user_key）、`internal_token`、`gateway_url`、`public_base_url`、`reports_root`、`github_token?`、`default_repo: TraderAlice/OpenAlice`。
 
-分发：单个 `@filter.event_message_type(ALL)` 入口；以 `/` 或 `／` 开头的按指令 DSL 解析，其余按 `routes.yaml`。中间件顺序：白名单 → 解析（指令名/别名 → 子指令词 → 紧跟的 `%n`（`%`/`％` 同义）→ 按 `usage` 取其余参数、按类型解析）→ 权限 → 动作 → 按结果键回话。权限不足时私下不回（避免刷屏），日志记录。`owner` 权限 = 该会话创建者或管理员。
+分发：单个 `@filter.event_message_type(ALL)` 入口；以 `/` 或 `／` 开头的按指令 DSL 解析，其余按 `routes.yaml`。中间件顺序：白名单 → 解析（指令名/别名 → 子指令词 → 紧跟的 `%n`（`%`/`％` 同义）→ 按 `usage` 取其余参数、按类型解析）→ 权限 → 动作 → 按结果键回话。权限不足时私下不回（避免刷屏），日志记录。`owner` 权限 = 该会话创建者或管理员。agent 经 `/v1/commands` 调用指令时走同一套解析、权限与动作，权限按会话创建者判断（§6.1）。
 
 **内置指令**（每条都是 `templates/commands/` 下一个文件；动作列只写关键参数）
 
@@ -406,6 +476,7 @@ AI 指令：
 | 帮我调查 | `/帮我调查 <内容>` | `start`（scenario: investigate） | all |
 | 解读 | `/解读 <链接>` | `github`（scenarios: { issue: github-issue, pr: github-pr }） | all |
 | 升级bot | `/升级bot <需求>` | `start`（scenario: upgrade-bot） | admin |
+| 管家 | `/管家 <内容>` | `start`（scenario: steward；`one_per_chat`，本群已有管家就发给它） | admin |
 | 继续 | `/继续 [%会话] <内容>` | `send` | all |
 
 程序指令：
@@ -422,16 +493,21 @@ AI 指令：
 | 需求列表 | `/需求列表 [页]` | `list`（source: sessions，scenario: requirement，archived: true） | all |
 | 收藏 | `/收藏`（引用一条消息） | `favorite` | all |
 | 收藏夹 | `/收藏夹 [页]` | `list`（source: favorites） | all |
+| 群列表 | `/群列表` | `chats` | admin |
+| 状态 | `/状态` | `status` | admin |
 | alicedev | `/alicedev [指令名]` | `help` | all |
 
-`share` 动作：每个被 @ 的用户一个 token（`user_key` 记入 `tokens_issued`），无 @ 给发起人；逐条 `[At, Plain(url)]`。`favorite` 动作：原作者、文本、图片落盘 `data/plugin_data/alicedev/images/`、收藏人。`list` 每页 10 条，页脚 `第 x/y 页 · /<指令> n`。
+`share` 动作：每个被 @ 的用户一个 token（`user_key` 记入 `tokens_issued`），无 @ 给发起人；逐条 `[At, Plain(url)]`。`favorite` 动作：原作者、文本、图片落盘 `data/plugin_data/alicedev/images/`、收藏人；agent 收藏时收藏人是会话创建者，原作者是被引用消息的群友或会话（「%n 名称」）。`list` 每页 10 条，页脚 `第 x/y 页 · /<指令> n`。
+
+**agent 可以调用的指令**（各场景状态的 `agent_commands`）：`requirement`、`investigate`、`github-issue`、`github-pr` 的对话态可用 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`（收藏要的消息 id 只能从 `/会话 %n` 的 `recent` 取）；`steward` 见 §13.3。`upgrade-bot` 不开放。
 
 ## 10. DuckDB schema（`bot/alicedev/store/schema.sql`，`schema_version` 表）
 
 ```sql
 sessions(session_id PK, chat_key, no, scenario, name, created_by, input JSON, state, workspace_id, worktree_path,
-         base_sha, data JSON, created_at, updated_at, UNIQUE(chat_key, no))
+         base_sha, data JSON, assigned_by, created_at, updated_at, UNIQUE(chat_key, no))
          -- no：本群会话号；input：触发时的 prompt 变量（text、sender、chat、quoted、images、github）
+         -- assigned_by：由哪个会话的 agent 开的（§6.1），人开的为空；只是来源记录
          -- state：场景定义的状态 + 内建 queued / main_sync_failed / failed / archived
          -- 会话的「最近活动」取其各 agent 的 last_activity_at 最大值，不单独存
 chat_current_sessions(chat_key PK, session_id, updated_at)
@@ -439,14 +515,18 @@ agents(agent_ref PK, session_id, state, provider, agent_id, workspace_id, server
        status, legacy_ref UNIQUE, created_at, last_activity_at)
        -- state：该 agent 服务的会话状态；status：§4 agent 状态机
        -- legacy_ref：v2 迁移前的 s_… 会话 ref（旧 agent 的 label 与回复仍用它）
-messages(msg_ref PK, agent_ref, chat_key, platform_message_id, sender_key, text, session_id, created_at,
-         UNIQUE(chat_key, platform_message_id))
+messages(msg_ref PK, agent_ref, chat_key, platform_message_id, sender_key, sender_name, content, text, session_id,
+         created_at, UNIQUE(chat_key, platform_message_id))
+         -- text：注入 agent 的内容（首轮为渲染后的 prompt）；content：群友发的平台原文，
+         -- 只有来自平台的消息才有，状态 prompt 与 agent 调用为空；sender_name：发送者名字的副本
+         -- platform_message_id：平台消息 id；agent 调用开的会话为 call:<call_id>
 outbox(reply_id PK, seq, chat_key, session_id, agent_ref, msgs JSON, payload JSON, payload_sha256,
        state, attempts, next_attempt_at, last_error, platform_message_ids JSON, created_at, updated_at)
        -- seq：同一 chat_key 内的出队顺序
        -- state: queued | sent | failed；程序指令与调度自己的回话 agent_ref 为空，与会话无关时 session_id 也为空
 outbound(platform_message_id PK, chat_key, session_id, created_at)   -- session_id：消息关于哪个会话；无关会话的程序回话为空
 favorites(id PK, chat_key, saver_key, saver_name, author_key, author_name, text, images JSON, platform_message_id, created_at)
+         -- platform_message_id：被收藏消息的平台 id；agent 收藏为 call:<call_id>（重试去重）
 reports(report_id PK, session_id, source_path, published_path, created_at)
 tokens_issued(token_id PK, session_id, user_key, issued_by, target, issued_at, expires_at)   -- 审计
 ```
@@ -456,7 +536,7 @@ tokens_issued(token_id PK, session_id, user_key, issued_by, target, issued_at, e
 - `docker-compose.yml`（项目 `deploy`）：`caddy`、`gateway`、`astrbot`、`snowluma`、`t2i`、`paseo` + 一次性 `astrbot-init`、`snowluma-init`、`reports-init`；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`ONEBOT_ACCESS_TOKEN`（aiocqhttp 反向 WS 与 snowluma 共用）、`PANEL_BIND_IP`（管理面板绑定的 netbird 接口 IP）、`OPENCODE_API_KEY`、`VNC_PASSWD?`、`GITHUB_TOKEN?`。
 - 卷：`astrbot_data`；snowluma 的 `qq-gateway-data`/`qq-client-config`/`qq-client-data`（持久设备身份，重启不掉线）；`paseo_home`（daemon 与 harness 配置，用户自管）；`workspace`（各场景的 `cwd`、fixed-main 与会话 worktree）；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `_published` ro）。
 - snowluma：镜像 `motricseven7/snowluma`；反向 WS 由 `deploy/astrbot/snowluma_onebot.json` seed 为 `wsClients.url=ws://astrbot:6199`（token `ONEBOT_ACCESS_TOKEN`）。面板（noVNC `6081` / WebUI `5099`）只绑 `${PANEL_BIND_IP}`，OneBot 端口不发布宿主机。首次 QQ 登录是运行时人工步骤（noVNC 扫码）。
-- paseo 镜像：上游 paseo 原样，不 fork、不改源码；alicedev 只叠加运行层 `deploy/paseo/Dockerfile`：`make harness` 产出的 `/opt/alicedev/{omp-extension,reply-cli}`、声明 `omp` 与 `omp-alicedev` provider 的 daemon 配置、entrypoint，以及 agent 需要的 `omp`（bun）、`git`、`gh`、docker CLI、agent-browser + Chromium、带 bot 依赖与 pytest 的 Python 环境（供 `python -m alicedev.dsl` 与测试）。基础镜像由 `docker/base/Dockerfile` 以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（网关的自托管 manifest 依赖它）。
+- paseo 镜像：上游 paseo 原样，不 fork、不改源码；alicedev 只叠加运行层 `deploy/paseo/Dockerfile`：`harness/` 构建出的 `/opt/alicedev/omp-extension`（含 `skills/alicedev`）与 `alicedev` CLI（`/usr/local/bin/alicedev`）、声明 `omp` 与 `omp-alicedev` provider 的 daemon 配置、entrypoint，以及 agent 需要的 `omp`（bun）、`git`、`gh`、docker CLI、agent-browser + Chromium、带 bot 依赖与 pytest 的 Python 环境（供 `python -m alicedev.dsl` 与测试）。基础镜像由 `docker/base/Dockerfile` 以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（网关的自托管 manifest 依赖它）。
 - astrbot 镜像：固定 digest 的上游 AstrBot，加 docker CLI 与预装的 `bot/requirements.txt` 依赖（`deploy/astrbot/Dockerfile`）；astrbot 与 paseo 都挂 `/var/run/docker.sock`，paseo 用户属宿主 docker 组（`DOCKER_GID`）。
 - astrbot 挂载：插件目录 `/AstrBot/data/plugins/alicedev` ← 检出的 `bot/`；`/AstrBot/alicedev-templates` ← 检出的 `templates/`。`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`）+ `t2i_endpoint=http://t2i:8999`。
 - **bot 与 DSL 交付**：宿主上一份由 `deployctl` 拥有的 alicedev git 检出，astrbot 挂载其中的 `bot/` 与 `templates/`。部署 = 检出切到 main 上的目标 SHA + AstrBot 插件热重载（`terminate()` + `initialize()`，不重启容器，平台连接不断）；`requirements.txt` 或平台配置变化时改为 `restart astrbot`。回滚 = 切回上一 SHA 再重载。paseo 不动。重载入口是 AstrBot dashboard 的 `POST /api/v1/plugins/alicedev/reload`（插件上次加载失败时为 `/api/v1/plugins/failed/alicedev/reload`），以带插件权限的 API key（`X-API-Key`，`.env` 的 `ASTRBOT_API_KEY`）认证。
@@ -477,7 +557,7 @@ bot/                      AstrBot 插件（DSL · 传输 · 调度 · 可见性�
   alicedev/outbox/        出站队列：入队校验、outbox worker（§6）
   alicedev/store/         duckdb, schema.sql, repositories
   alicedev/render/        cards (html_render), pagination, cli.py（证据图 CLI）
-  alicedev/api/           aiohttp 内部 API（/v1/reply, /v1/agents, /v1/sessions, /v1/status, /v1/health）
+  alicedev/api/           aiohttp 内部 API（/v1/reply, /v1/commands, /v1/agents, /v1/sessions, /v1/status, /v1/health）
   alicedev/github/        链接解析与预取
   alicedev/reports.py     发布
 tools/                    shim 与运维 CLI：paseoctl tgctl deployctl deployrun mainsync e2e_driver.py bootstrap-fixed-main.sh
@@ -486,18 +566,19 @@ templates/routes.yaml     消息路由（§3.3）
 templates/scenarios/      场景 DSL 与状态 prompt（§3.4、§13）
 templates/messages.yaml   默认回话
 templates/cards/ templates/stickers/
-skills/                   agent 用的 skill（挂载给 paseo agent）
-harness/core/ harness/omp-extension/ harness/reply-cli/
+harness/core/ harness/omp-extension/ harness/cli/ harness/skills/alicedev/
 gateway/
 deploy/                   docker-compose.yml, dev/, e2e/, tg-cli/, astrbot/, paseo/
 docs/research/ docs/runbook.md docs/evidence/
+.omp/rules/deploy.md      部署规则（agent 在本仓库内自动加载）
+README.md
 ```
 
 ## 13. 场景清单
 
 ### 13.1 单对话态场景
 
-一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲 12h 只关闭 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。
+一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲 12h 只关闭 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。`discussing` 的 `agent_commands` 为 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`：AI 在对话中发现值得单独跟进的需求可以开需求会话（先用 `需求列表` 查重），发现值得留存的消息可以收藏（先用 `/会话 %n` 取消息 id）。
 
 | 场景 | 启动它的指令 | 名称 | reply 规格 | prompt 要点 |
 |---|---|---|---|---|
@@ -545,4 +626,19 @@ stateDiagram-v2
 
 各状态 prompt 的要求（写在 `templates/scenarios/upgrade-bot/*.md`）：
 - **working**：按需求建 issue；在会话分支实现并 commit、跑测试；经 pi-unified-exec / `tgctl` 使用 `e2e`、`tg-cli`，在同一冻结场景分别跑线上 SHA 与候选 SHA，走真实用户面（tg-cli 真投递 / webchat 经 agent-browser），标注会话号、两个 SHA、场景、时间，渲染前清 t2i / 渲染缓存；收敛判定写在该 prompt 里由 AI 执行。开 PR（closing keyword 关联 issue，证据进 PR body）。渲染说明图（产品级变化，不出现代码）与证据图（before/after + 测试结果）到 `reports_dir`，报告 `awaiting_approval`。改动了指令或场景 DSL 时，跑 `python -m alicedev.dsl check` 并把受影响的指令卡、场景卡放进证据图。不收敛或改动触及 `bot/`、`templates/` 以外（§11 交付范围）时报告 `needs_human`。
-- **deploying**：按 `data.commit` merge PR（head 已变或与 main 冲突则报告 `working`，变基后重新验证、重新批准）→ `mainsync align` 拉取 fixed-main → 经 `deployrun` 把宿主检出切到 merge 后的 main SHA 并热重载插件，核实插件内 SHA 与健康；核实不过切回上一 SHA 再重载。重载期间 bot 短暂不可用，回复靠 reply-cli 重试送达；新插件实例恢复本会话并接受该 transition。
+- **deploying**：按 `data.commit` merge PR（head 已变或与 main 冲突则报告 `working`，变基后重新验证、重新批准）→ `mainsync align` 拉取 fixed-main → 经 `deployrun` 把宿主检出切到 merge 后的 main SHA 并热重载插件，核实插件内 SHA 与健康；核实不过切回上一 SHA 再重载。重载期间 bot 短暂不可用，回复靠 `alicedev reply` 重试送达；新插件实例恢复本会话并接受该 transition。
+
+### 13.3 steward（`/管家`）
+
+管理员的分诊台：人用自然语言说要做什么，管家判断该由哪个会话做、派出去、之后按需查进度。它自己不做长调查。
+
+- 场景：`audience: admin`，`one_per_chat: true`，`cwd: /workspace/openalice`，provider 同 §13.1；一个对话态 `discussing`（reply：text、image_template `generic_card`）。名称 `管家 · {text}`。
+- `/管家 <内容>`（admin）：本群没有管家就新开，有就把内容发给它。最常用的放法是管理员与 bot 的私聊，在那里跨群操作。
+- `agent_commands`：`帮我调查`、`解读`、`需求`、`需求列表`、`收藏`、`收藏夹`、`会话列表`、`会话列表 全部`、`会话`、`归档`、`群列表`、`状态`。不含 `/继续`、`/切换`、`/链接`、`/升级bot` 及其 approve / reject（理由见 §3.2 与下文）。
+- 指派研究：「去研究 X」→ `/帮我调查 X`（缺省本群，`--chat` 可派到别的群）→ 回复「已派给 %n」。研究会话在它所在的群里直接回复，管家不转述、不接收推送；人问进度时，管家用 `/会话 %n` 看状态和最近往来再作答。
+- 记需求：先 `/需求列表` 查重，再 `/需求`。
+- 总览：「现在都在忙什么」→ `/会话列表`（可带 `--chat`）、`/群列表`、`/状态`。
+- 收尾：「%n 可以收了」→ `/归档 %n`；不能归档管家自己。
+- 管家派出的会话 `assigned_by` 指向管家，它们不能再派（§6.1）。
+- `/升级bot` 不开放：repo 场景派发要跑 mainsync 与建 worktree，同步阻塞可达 300s；管理员自己发 `/升级bot` 更直接。
+

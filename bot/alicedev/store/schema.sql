@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     data           JSON NOT NULL,
     created_at     TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
     updated_at     TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    assigned_by    BIGINT,
     UNIQUE (chat_key, no)
 );
 
@@ -68,6 +69,8 @@ CREATE TABLE IF NOT EXISTS messages (
     text                 TEXT NOT NULL,
     session_id           BIGINT,
     created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    sender_name          TEXT,
+    content              TEXT,
     UNIQUE (chat_key, platform_message_id)
 );
 

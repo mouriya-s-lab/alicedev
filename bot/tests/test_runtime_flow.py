@@ -358,7 +358,7 @@ def test_status_and_health_routes(tmp_path: Path) -> None:
         api = InternalApi(config=env.config, intake=env.intake, sessions=env.sessions,
                           agents=env.agents, scheduler=env.scheduler, outbox=env.outbox,
                           registry=lambda: env.registry, platforms_fn=lambda: ["telegram"],
-                          generation=7)
+                          generation=7, dispatcher=env.dispatcher)
         await env.dispatcher.handle(inbound("/需求 x"))
         async with TestClient(TestServer(api.app)) as client:
             health = await (await client.get("/v1/health")).json()

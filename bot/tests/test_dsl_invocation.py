@@ -31,8 +31,8 @@ def parse(text: str):
 
 def test_real_templates_load_clean() -> None:
     assert REG.errors == ()
-    assert len(REG.command_list()) == 15
-    assert set(REG.scenarios) == {"requirement", "investigate", "github-issue", "github-pr", "upgrade-bot"}
+    assert len(REG.command_list()) == 18
+    assert set(REG.scenarios) == {"requirement", "investigate", "github-issue", "github-pr", "steward", "upgrade-bot"}
 
 
 @pytest.mark.parametrize(

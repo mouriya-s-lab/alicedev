@@ -47,7 +47,7 @@ docker run --rm --env-file deploy/dev/gateway.env \
 
 ## 重启语义
 
-签名 cookie 是无状态的：只要 `GATEWAY_SECRET` 不变且未过期，网关重启后仍然有效。一次性 token 只存在当前进程内存中；GET/HEAD 预览本身不会消费 token，但任何重启都会使所有尚未成功 POST 消费的 token 失效。部署 runbook 必须把这一点作为操作行为记录。
+签名 cookie 是无状态的：只要 `GATEWAY_SECRET` 不变且未过期，网关重启后仍然有效。一次性 token 只存在当前进程内存中；GET/HEAD 预览本身不会消费 token，但任何重启都会使所有尚未成功 POST 消费的 token 失效。`.omp/rules/deploy.md` 的网关上线步骤已写明这一点。
 
 会话页只显示这个会话的信息（`%n`、会话名、状态、场景、创建人、创建时间、最近活动、是否本群当前会话），数据来自 bot 的 `GET /v1/sessions/{id}`。bot 不可达、返回非 200 或 JSON 不合法时，会话页仍返回 200，写明「会话信息暂时取不到」，「进入会话」按钮照常可用。`session` 或 `go` 缺失、不合法时返回 404 页面。
 

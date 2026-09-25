@@ -1,0 +1,11 @@
+# bot 运行状态：版本、平台、会话与 agent 计数、DSL 错误、待发消息数。
+name: 状态
+type: program
+aliases: [status]
+summary: 查看 bot 的运行状态
+usage: /状态
+examples:
+  - /状态
+permission: admin
+do:
+  status:

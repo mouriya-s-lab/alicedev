@@ -32,8 +32,10 @@ from alicedev.paseo.control import (  # noqa: E402
 )
 from alicedev.reports import ReportPublisher  # noqa: E402
 from alicedev.scheduler.engine import Scheduler  # noqa: E402
+from alicedev.status import BotStatus, collect_status  # noqa: E402
 from alicedev.store.agents_repo import AgentsRepo  # noqa: E402
 from alicedev.store.db import Store  # noqa: E402
+from alicedev.store.exchanges_repo import ExchangesRepo  # noqa: E402
 from alicedev.store.favorites_repo import FavoritesRepo  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
@@ -274,9 +276,18 @@ async def make_env(tmp: Path, *, templates: Path = TEMPLATES) -> Env:
         reports=ReportPublisher(store=store, config=config), renderer=renderer,
         scheduler=scheduler, config=config,
     )
+
+    async def status_fn() -> BotStatus:
+        return await collect_status(
+            registry=registry, sessions=sessions, agents=agents, outbox=outbox,
+            platforms_fn=lambda: ["telegram"], generation=1, revision="test", started_at=0.0,
+            ended_states=scheduler.ended_states(),
+        )
+
     dispatcher = Dispatcher(
         config=config, store=store, sessions=sessions, favorites=FavoritesRepo(store),
         scheduler=scheduler, outbox=outbox, github=None, registry=lambda: registry,
+        agents=agents, exchanges=ExchangesRepo(store), status_fn=status_fn,
     )
     return Env(tmp, config, store, sessions, agents, messages, paseo, gateway, sender, cards,
                outbox, scheduler, intake, dispatcher, registry)

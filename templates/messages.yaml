@@ -7,6 +7,8 @@
 start.created: "已开始 %{{ session.no }} {{ session.name }}"
 start.queued: "已排队 %{{ session.no }} {{ session.name }}：同类会话正在进行，前一个结束后自动开始。"
 start.failed: "%{{ session.no }} 创建失败：{{ reason }}"
+start.sent: ""  # one_per_chat：本群已有这个场景的会话，内容已发给它，由它自己回复
+start.busy: "%{{ session.no }} 还在处理上一条，稍后再说。"
 github.created: "已开始 %{{ session.no }} {{ session.name }}"
 github.fetch_failed: "读取 GitHub 内容失败，请检查链接或稍后再试。{% if reason %}（{{ reason }}）{% endif %}"
 github.failed: "%{{ session.no }} 创建失败：{{ reason }}"

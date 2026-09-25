@@ -5,8 +5,9 @@ on a dedicated single-thread executor serialized by an internal connection lock.
 ``Store.lock`` is a *separate* asyncio.Lock repositories take for check-then-write
 sequences that must be atomic across several queries.
 
-``open()`` applies schema v3. A v2 database (``sessions.session_ref`` exists) is
-migrated once, in one transaction, by :mod:`alicedev.store.migrate_v3`.
+``open()`` applies schema v4. A v2 database (``sessions.session_ref`` exists) is
+migrated once, in one transaction, by :mod:`alicedev.store.migrate_v3`; v3 databases
+gain the v4 columns in place (``_V4_COLUMNS``).
 """
 
 from __future__ import annotations
@@ -22,7 +23,15 @@ import duckdb
 from alicedev.store import migrate_v3
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Columns added in v4 (ARCHITECTURE §10). ``CREATE TABLE IF NOT EXISTS`` leaves an
+# existing v3 table untouched, so these are added in place; all are nullable.
+_V4_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("sessions", "assigned_by", "BIGINT"),
+    ("messages", "sender_name", "TEXT"),
+    ("messages", "content", "TEXT"),
+)
 
 
 class Store:
@@ -36,7 +45,7 @@ class Store:
         self.lock = asyncio.Lock()
 
     async def open(self) -> None:
-        """Open the connection, migrate a v2 database, apply schema v3 (idempotent)."""
+        """Open the connection, migrate a v2 database, apply schema v4 (idempotent)."""
         loop = asyncio.get_running_loop()
         self._conn = await loop.run_in_executor(
             self._executor, functools.partial(duckdb.connect, self._db_path)
@@ -44,6 +53,8 @@ class Store:
         schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
         await self._run(lambda c: migrate_v3.migrate_if_needed(c, schema_sql))
         await self._run(lambda c: c.execute(schema_sql))
+        for table, column, sql_type in _V4_COLUMNS:
+            await self.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type}")
         await self._reconcile_sequences()
         await self.execute(
             "INSERT INTO schema_version (version, applied_at) "

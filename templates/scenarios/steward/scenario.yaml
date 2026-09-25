@@ -1,0 +1,32 @@
+# 管家：管理员的分诊台。判断一件事该交给哪个会话、派出去、之后按需查进度（ARCHITECTURE §13.3）。
+# 每个群最多一个；只接收管理员的输入；可以跨群查看和指派。
+name: steward
+title: "管家 · {{ text }}"
+description: 管理员的管家：分诊、指派研究、查看各群会话
+provider: omp-alicedev/opencode-go/muse-spark-1.3-contributor
+cwd: /workspace/openalice
+audience: admin
+one_per_chat: true
+initial: discussing
+states:
+  discussing:
+    kind: agent
+    prompt: discussing.md
+    reply:
+      kinds: [text, image_template]
+      image_templates: [generic_card]
+      stickers: []
+      max_text_chars: 600
+    agent_commands:
+      - 帮我调查
+      - 解读
+      - 需求
+      - 需求列表
+      - 收藏
+      - 收藏夹
+      - 会话列表
+      - 会话列表 全部
+      - 会话
+      - 归档
+      - 群列表
+      - 状态

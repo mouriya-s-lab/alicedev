@@ -9,9 +9,9 @@ raises for content problems.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import yaml
 
@@ -19,12 +19,15 @@ from alicedev.dsl import render as tmpl
 from alicedev.dsl.invocation import ArgError, match_command, parse_args
 from alicedev.dsl.messages import ACTION_NAMES, required_keys
 from alicedev.dsl.model import (
+    AGENT_ACTIONS,
     AI_ACTIONS,
     BUILTIN_STATES,
     RESULT_KEYS,
     Action,
     AgentState,
+    Audience,
     ArgType,
+    ChatsAction,
     Command,
     CommandType,
     CwdWorkdir,
@@ -51,6 +54,7 @@ from alicedev.dsl.model import (
     ShareAction,
     SourceRef,
     StartAction,
+    StatusAction,
     State,
     TerminalState,
     Tmpl,
@@ -62,6 +66,8 @@ LIST_CARDS: Mapping[ListSource, frozenset[str]] = {
     ListSource.SESSIONS: frozenset({"session_list", "requirements_list"}),
     ListSource.FAVORITES: frozenset({"favorites_list"}),
 }
+# Actions that always render one fixed card (§3.2).
+FIXED_CARDS: Mapping[type, str] = {ChatsAction: "chats_list", StatusAction: "bot_status"}
 
 
 # --- YAML with line numbers ---------------------------------------------------
@@ -194,12 +200,17 @@ class _Ctx:
     stickers: frozenset[str]
     scenarios: Mapping[str, Scenario]
     human_commands: frozenset[str]
+    # (scenario, state) -> line of the state declaring agent_commands, for the cross check.
+    agent_command_lines: dict[tuple[str, str], int] = field(default_factory=dict)
 
 
 # --- scenarios ------------------------------------------------------------------
 
-_SCENARIO_KEYS = ("name", "title", "description", "provider", "cwd", "repo", "exclusive", "initial", "states")
-_STATE_KEYS = ("kind", "prompt", "reply", "next", "data", "share", "commands")
+_SCENARIO_KEYS = (
+    "name", "title", "description", "provider", "cwd", "repo", "exclusive", "one_per_chat", "audience",
+    "initial", "states",
+)
+_STATE_KEYS = ("kind", "prompt", "reply", "next", "data", "share", "commands", "agent_commands")
 _REPLY_KEYS = ("kinds", "image_templates", "text_templates", "stickers", "max_text_chars")
 
 
@@ -242,7 +253,9 @@ def _state(name: str, value: Any, line: int, directory: Path, ctx: _Ctx) -> Stat
     data = _strs(m, "data")
     share = _bool(m, "share")
     if kind == "agent":
-        _keys(m, ("kind", "prompt", "reply", "next", "data", "share"), ("prompt",), f"状态 {name}")
+        _keys(
+            m, ("kind", "prompt", "reply", "next", "data", "share", "agent_commands"), ("prompt",), f"状态 {name}"
+        )
         prompt_name = _str(m, "prompt")
         prompt_path = directory / prompt_name
         if Path(prompt_name).name != prompt_name or not prompt_path.is_file():
@@ -255,8 +268,14 @@ def _state(name: str, value: Any, line: int, directory: Path, ctx: _Ctx) -> Stat
             tmpl.check(source, tmpl.PROMPT_VARS)
         except tmpl.TemplateProblem as exc:
             raise _Reject(m.at("prompt"), f"{prompt_name}：{exc}") from exc
+        agent_commands = tuple(" ".join(path.split()) for path in _strs(m, "agent_commands"))
+        if any(not path for path in agent_commands):
+            raise _Reject(m.at("agent_commands"), "agent_commands 里有空的指令路径")
+        if len(set(agent_commands)) != len(agent_commands):
+            raise _Reject(m.at("agent_commands"), "agent_commands 里有重复的指令路径")
         return AgentState(
-            name=name, prompt=Tmpl(source), reply=reply, next=_strs(m, "next"), data=data, share=share
+            name=name, prompt=Tmpl(source), reply=reply, next=_strs(m, "next"), data=data, share=share,
+            agent_commands=agent_commands,
         )
     if kind == "human":
         _keys(m, ("kind", "reply", "data", "share", "commands"), ("commands",), f"状态 {name}")
@@ -315,6 +334,14 @@ def _scenario(path: Path, ctx: _Ctx) -> Scenario:
                         raise _Reject(line, f"人工指令 {command} 指向不存在的状态：{target}")
             case TerminalState():
                 pass
+    exclusive = _bool(m, "exclusive")
+    one_per_chat = _bool(m, "one_per_chat")
+    if exclusive and one_per_chat:
+        raise _Reject(m.at("one_per_chat"), "one_per_chat 不能与 exclusive 同用")
+    audience = _enum(m, "audience", Audience, "audience") if "audience" in m else Audience.ALL
+    for state in states.values():
+        if isinstance(state, AgentState) and state.agent_commands:
+            ctx.agent_command_lines[(name, state.name)] = states_map.at(state.name)
     return Scenario(
         name=name,
         title=title,
@@ -323,7 +350,9 @@ def _scenario(path: Path, ctx: _Ctx) -> Scenario:
         workdir=workdir,
         initial=initial,
         states=states,
-        exclusive=_bool(m, "exclusive"),
+        exclusive=exclusive,
+        one_per_chat=one_per_chat,
+        audience=audience,
         source=SourceRef(path=path, line=1),
     )
 
@@ -343,6 +372,8 @@ _ACTION_FIELDS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "share": (("session", "to"), ()),
     "favorite": (("quoted",), ("quoted",)),
     "list": (("source", "card", "page", "scenario", "archived"), ("source", "card")),
+    "chats": ((), ()),
+    "status": ((), ()),
     "help": (("command",), ()),
 }
 
@@ -437,6 +468,12 @@ def _action(value: Any, line: int, args: Mapping[str, ArgType], ctx: _Ctx, allow
                 scenario=scenario,
                 archived=_bool(body, "archived"),
             )
+        case "chats" | "status":
+            action = ChatsAction() if verb == "chats" else StatusAction()
+            card = FIXED_CARDS[type(action)]
+            if card not in ctx.cards:
+                raise _Reject(m.at(verb), f"卡片模板不存在：templates/cards/{card}.html")
+            return action
         case "help":
             return HelpAction(command=_arg_ref(body, "command", args, ArgType.WORD))
     raise _Reject(line, f"未知的动作：{verb}")  # unreachable: verb checked above
@@ -444,7 +481,7 @@ def _action(value: Any, line: int, args: Mapping[str, ArgType], ctx: _Ctx, allow
 
 def _shorthand(verb: str, value: Any, line: int) -> LineMap:
     """``start: requirement`` style is not allowed; every action takes a mapping."""
-    if value is None and verb in ("session_show", "session_switch", "session_archive", "help", "share"):
+    if value is None and verb in ("session_show", "session_switch", "session_archive", "help", "share", "chats", "status"):
         empty = LineMap()
         empty.line = line
         return empty
@@ -454,6 +491,24 @@ def _shorthand(verb: str, value: Any, line: int) -> LineMap:
 def _need_scenario(name: str, ctx: _Ctx, line: int) -> None:
     if name not in ctx.scenarios:
         raise _Reject(line, f"引用了不存在（或被拒绝）的场景：{name}")
+
+
+def _started_scenarios(action: Action) -> tuple[str, ...]:
+    """Scenarios an action can open a session of."""
+    match action:
+        case StartAction(scenario=scenario):
+            return (scenario,)
+        case GithubAction(scenarios=scenarios):
+            return tuple(scenarios.values())
+        case _:
+            return ()
+
+
+def _admin_starts(action: Action, ctx: _Ctx) -> list[str]:
+    return [
+        name for name in _started_scenarios(action)
+        if name in ctx.scenarios and ctx.scenarios[name].audience is Audience.ADMIN
+    ]
 
 
 # --- commands ---------------------------------------------------------------------
@@ -520,6 +575,11 @@ def _command(m: LineMap, ctx: _Ctx, source: SourceRef, parent: str | None) -> Co
             f"{'AI' if is_ai else '程序'}指令",
         )
     say = _say(m, action, do_vars | tmpl.RESULT_VARS)
+    admin_only = _admin_starts(action, ctx)
+    if admin_only and permission is not Permission.ADMIN:
+        raise _Reject(
+            m.at("permission"), f"场景 {admin_only[0]} 是 audience: admin，启动它的指令必须是 permission: admin"
+        )
 
     subcommands: dict[str, Command] = {}
     if "subcommands" in m and m["subcommands"] is not None:
@@ -591,6 +651,9 @@ def _routes(path: Path, ctx: _Ctx) -> tuple[Route, ...]:
         _keys(m, ("when", "do", "say"), ("when", "do"), "路由")
         when = _enum(m, "when", RouteWhen, "路由条件")
         action = _action(m["do"], m.at("do"), {}, ctx, vars_)
+        admin_only = _admin_starts(action, ctx)
+        if admin_only:
+            raise _Reject(m.at("do"), f"路由不能启动 audience: admin 的场景：{admin_only[0]}")
         routes.append(Route(when=when, do=action, say=_say(m, action, vars_ | tmpl.RESULT_VARS)))
     return tuple(routes)
 
@@ -651,6 +714,7 @@ def load_registry(root: Path) -> Registry:
 
     commands: dict[str, Command] = {}
     owners: dict[str, Path] = {}
+    rejected_commands: set[str] = set()  # file stems (= command names) rejected on their own
     for path in sorted((root / "commands").glob("*.yaml")):
         try:
             m = _mapping(_load_yaml(path), 1, "指令文件")
@@ -666,6 +730,7 @@ def load_registry(root: Path) -> Registry:
                     )
         except _Reject as exc:
             reject(path, exc)
+            rejected_commands.add(path.stem)
             continue
         for key in (command.name, *command.aliases):
             commands[key] = command
@@ -679,6 +744,11 @@ def load_registry(root: Path) -> Registry:
         except _Reject as exc:
             reject(routes_path, exc)
 
+    _check_agent_commands(scenarios, commands, owners, rejected_commands, ctx, reject)
+    route_scenarios = {name for route in routes for name in _referenced_scenarios(route.do)}
+    if route_scenarios - set(scenarios):
+        errors.append(DslError(path="routes.yaml", line=1, message="路由引用的场景已被拒绝"))
+        routes = ()
     return Registry(
         commands=commands,
         routes=routes,
@@ -686,6 +756,70 @@ def load_registry(root: Path) -> Registry:
         messages=messages,
         errors=tuple(errors),
     )
+
+
+def _referenced_scenarios(action: Action) -> tuple[str, ...]:
+    if isinstance(action, ListAction) and action.scenario is not None:
+        return (action.scenario,)
+    return _started_scenarios(action)
+
+
+def _command_scenarios(command: Command) -> set[str]:
+    names = set(_referenced_scenarios(command.do))
+    for sub in command.subcommands.values():
+        names |= _command_scenarios(sub)
+    return names
+
+
+def _agent_commands_problem(
+    scenario: Scenario, registry: Registry, rejected_commands: set[str]
+) -> str | None:
+    for state in scenario.states.values():
+        if not isinstance(state, AgentState):
+            continue
+        for path in state.agent_commands:
+            command = registry.command_at(path)
+            if command is None:
+                if path.split()[0] in rejected_commands:
+                    continue  # that file's own error is reported; only this entry is unavailable
+                return f"状态 {state.name} 的 agent_commands 引用了不存在的指令：{path}"
+            if not isinstance(command.do, AGENT_ACTIONS):
+                return f"指令 {path} 的动作 {ACTION_NAMES[type(command.do)]} 不能由 agent 调用"
+            if command.permission is Permission.ADMIN and scenario.audience is not Audience.ADMIN:
+                return f"指令 {path} 需要管理员权限，只能出现在 audience: admin 场景的 agent_commands 里"
+    return None
+
+
+def _check_agent_commands(
+    scenarios: dict[str, Scenario],
+    commands: dict[str, Command],
+    owners: dict[str, Path],
+    rejected_commands: set[str],
+    ctx: _Ctx,
+    reject: Callable[[Path, "_Reject"], None],
+) -> None:
+    """Scenarios whose agent_commands name an unknown or forbidden command are rejected,
+    then commands that start or list a rejected scenario are rejected (§3.4, §3.5). An
+    entry naming a command file rejected on its own is only unavailable: one broken
+    command must not take every scenario that lists it down."""
+    view = Registry(commands=commands, routes=(), scenarios=scenarios, messages={}, errors=())
+    for scenario in list(scenarios.values()):
+        problem = _agent_commands_problem(scenario, view, rejected_commands)
+        if problem is None:
+            continue
+        line = next((ln for (sc, _), ln in ctx.agent_command_lines.items() if sc == scenario.name), 1)
+        assert scenario.source is not None
+        reject(scenario.source.path, _Reject(line, problem))
+        del scenarios[scenario.name]
+    for key, command in list(commands.items()):
+        if key != command.name:
+            continue
+        missing = sorted(name for name in _command_scenarios(command) if name not in scenarios)
+        if not missing:
+            continue
+        reject(owners[key], _Reject(1, f"引用了被拒绝的场景：{missing[0]}"))
+        for alias in (command.name, *command.aliases):
+            commands.pop(alias, None)
 
 
 def _rel(root: Path, path: Path) -> str:

@@ -37,11 +37,12 @@ class SessionRow:
     data: Mapping[str, Any]
     created_at: datetime
     updated_at: datetime
+    assigned_by: int | None
 
 
 _COLUMNS = (
     "session_id, chat_key, no, scenario, name, created_by, input, state, workspace_id, "
-    "worktree_path, base_sha, data, created_at, updated_at"
+    "worktree_path, base_sha, data, created_at, updated_at, assigned_by"
 )
 
 
@@ -70,6 +71,7 @@ def _row(row: tuple) -> SessionRow:
         data=_json(row[11]),
         created_at=row[12],
         updated_at=row[13],
+        assigned_by=int(row[14]) if row[14] is not None else None,
     )
 
 
@@ -86,6 +88,7 @@ class SessionsRepo:
         created_by: str,
         input: Mapping[str, Any],
         state: str,
+        assigned_by: int | None,
     ) -> SessionRow:
         """Allocate the next per-chat number and insert (caller holds store.lock)."""
         session_id = await self._store.next_id("seq_sessions")
@@ -95,10 +98,10 @@ class SessionsRepo:
         no = int(row[0]) if row else 1
         await self._store.execute(
             "INSERT INTO sessions (session_id, chat_key, no, scenario, name, created_by, "
-            "input, state, data) VALUES (?,?,?,?,?,?,?,?,?)",
+            "input, state, data, assigned_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 session_id, chat_key, no, scenario, bounded_session_name(name), created_by,
-                json.dumps(dict(input), ensure_ascii=False, default=str), state, "{}",
+                json.dumps(dict(input), ensure_ascii=False, default=str), state, "{}", assigned_by,
             ),
         )
         created = await self.get(session_id)
@@ -259,3 +262,59 @@ class SessionsRepo:
             last_activity_at=await self.last_activity(row.session_id),
             is_current=current is not None,
         )
+
+    async def known_chats(self, finished_states: tuple[str, ...]) -> list[KnownChat]:
+        finished_marks = ",".join("?" for _ in finished_states)
+        open_count = (
+            f"COUNT(*) FILTER (WHERE state NOT IN ({finished_marks}))"
+            if finished_states
+            else "COUNT(*)"
+        )
+        rows = await self._store.fetch_all(
+            f"""WITH session_counts AS (
+                    SELECT chat_key, {open_count} AS open_sessions
+                    FROM sessions
+                    GROUP BY chat_key
+                ),
+                latest_sessions AS (
+                    SELECT chat_key, input,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY chat_key
+                               ORDER BY created_at DESC, session_id DESC
+                           ) AS session_rank
+                    FROM sessions
+                ),
+                chat_activity AS (
+                    SELECT s.chat_key, MAX(a.last_activity_at) AS last_activity_at
+                    FROM sessions AS s
+                    LEFT JOIN agents AS a ON a.session_id = s.session_id
+                    GROUP BY s.chat_key
+                )
+                SELECT latest.chat_key,
+                       COALESCE(json_extract_string(latest.input, '$.chat.name'), '') AS name,
+                       session_counts.open_sessions,
+                       chat_activity.last_activity_at
+                FROM latest_sessions AS latest
+                JOIN session_counts USING (chat_key)
+                JOIN chat_activity USING (chat_key)
+                WHERE latest.session_rank = 1
+                ORDER BY chat_activity.last_activity_at DESC NULLS LAST, latest.chat_key ASC""",
+            finished_states,
+        )
+        return [
+            KnownChat(
+                chat_key=row[0],
+                name=row[1],
+                open_sessions=int(row[2]),
+                last_activity_at=row[3],
+            )
+            for row in rows
+        ]
+
+
+@dataclass(frozen=True)
+class KnownChat:
+    chat_key: str
+    name: str
+    open_sessions: int
+    last_activity_at: datetime | None

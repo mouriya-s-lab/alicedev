@@ -28,6 +28,8 @@ class MessagesRepo:
         chat_key: str,
         platform_message_id: str | None,
         sender_key: str | None,
+        sender_name: str | None,
+        content: str | None,
         text: str,
         session_id: int | None,
         agent_ref: str | None,
@@ -43,8 +45,11 @@ class MessagesRepo:
                 return ClaimedMessage(str(existing[0]), existing[1], existing[2], fresh=False)
         await self._store.execute(
             "INSERT INTO messages (msg_ref, agent_ref, chat_key, platform_message_id, sender_key, "
-            "text, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (msg_ref, agent_ref, chat_key, platform_message_id, sender_key, text, session_id),
+            "sender_name, content, text, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                msg_ref, agent_ref, chat_key, platform_message_id, sender_key,
+                sender_name, content, text, session_id,
+            ),
         )
         return ClaimedMessage(msg_ref, session_id, agent_ref, fresh=True)
 

@@ -1,0 +1,16 @@
+# 管理员的管家（场景 steward）：分诊、指派研究、查看各群会话。每个群最多一个，已有就把话发给它。
+name: 管家
+type: ai
+aliases: [steward]
+summary: 让管家分诊、指派研究、查看各群会话（本群已有管家就接着说）
+usage: /管家 <内容>
+examples:
+  - /管家 去研究一下行情推送为什么偶尔延迟十几秒
+  - /管家 现在各群都在忙什么
+permission: admin
+args:
+  内容: text
+do:
+  start:
+    scenario: steward
+    text: "{{ 内容 }}"
