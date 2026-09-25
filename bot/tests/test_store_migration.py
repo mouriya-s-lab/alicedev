@@ -1,4 +1,4 @@
-"""Schema v3: fresh open, v2 → v3 migration on a synthetic fixture, and the prod-copy rehearsal."""
+"""Schema v4: fresh open, v2 → v4 migration on a synthetic fixture, and the prod-copy rehearsal."""
 
 from __future__ import annotations
 
@@ -21,21 +21,21 @@ PROD_COPY = Path(os.environ.get("ALICEDEV_PROD_DB_COPY",
                                 str(Path.home() / "Ext/tmp/alicedev-migration/alicedev.duckdb")))
 
 
-def test_fresh_open_creates_v3(tmp_path: Path) -> None:
+def test_fresh_open_creates_v4(tmp_path: Path) -> None:
     async def main() -> None:
         store = Store(str(tmp_path / "db.duckdb"))
         await store.open()
         assert (await store.fetch_one("SELECT MAX(version) FROM schema_version"))[0] == SCHEMA_VERSION
         async with store.lock:
             row = await SessionsRepo(store).create(chat_key="c", scenario="requirement", name="x",
-                                                   created_by="u", input={}, state="queued")
+                                                   assigned_by=None, created_by="u", input={}, state="queued")
         assert (row.no, row.session_id) == (1, 1)
         await store.close()
         store = Store(str(tmp_path / "db.duckdb"))
         await store.open()  # reopen is idempotent
         async with store.lock:
             row = await SessionsRepo(store).create(chat_key="c", scenario="requirement", name="y",
-                                                   created_by="u", input={}, state="queued")
+                                                   assigned_by=None, created_by="u", input={}, state="queued")
         assert (row.no, row.session_id) == (2, 2)
         await store.close()
 
@@ -110,7 +110,7 @@ def test_migrate_synthetic_v2(tmp_path: Path) -> None:
         # Sequences continue after migrated ids.
         async with store.lock:
             new = await SessionsRepo(store).create(chat_key="chatB", scenario="requirement", name="n",
-                                                   created_by="u", input={}, state="queued")
+                                                   assigned_by=None, created_by="u", input={}, state="queued")
         assert (new.session_id, new.no) == (6, 2)
         assert await store.next_id("seq_favorites") == 8
         await store.close()

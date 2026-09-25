@@ -41,7 +41,7 @@ export interface Transition {
 }
 
 /**
- * What `chat_reply` hands to `alicedev-reply --json`: a reply, a transition, or both.
+ * What `chat_reply` hands to `alicedev reply --json`: a reply, a transition, or both.
  * The union makes "neither" unrepresentable.
  */
 export type ReplyRequest =

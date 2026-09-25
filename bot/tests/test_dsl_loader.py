@@ -76,13 +76,23 @@ def test_good_extra_command_loads(tpl: Path) -> None:
 def test_bad_command_rejected_others_survive(tpl: Path, patch: tuple[str, str], needle: str) -> None:
     old, new = patch
     assert old in GOOD_PING
+    baseline_commands = {command.name for command in load_registry(tpl).command_list()}
+    scenario_path = tpl / "scenarios/requirement/scenario.yaml"
+    scenario_text = scenario_path.read_text(encoding="utf-8")
+    agent_commands = "agent_commands: [需求, 需求列表, 收藏, 收藏夹]"
+    assert agent_commands in scenario_text
+    scenario_path.write_text(
+        scenario_text.replace(agent_commands, "agent_commands: [需求, 需求列表, 收藏, 收藏夹, ping]"),
+        encoding="utf-8",
+    )
     write(tpl, "commands/ping.yaml", GOOD_PING.replace(old, new))
     reg = load_registry(tpl)
     errs = [e for e in reg.errors if e.path == "commands/ping.yaml"]
     assert len(errs) == 1 and needle in errs[0].message, errs
     assert errs[0].line >= 1
     assert "ping" not in reg.commands
-    assert len(reg.command_list()) == 15  # the real commands still load
+    assert "requirement" in reg.scenarios
+    assert baseline_commands <= {command.name for command in reg.command_list()}
 
 
 def test_hash_truncated_example_is_caught(tpl: Path) -> None:
@@ -203,14 +213,28 @@ def test_every_prompt_renders_with_full_context() -> None:
                 )
                 out = render(state.prompt, ctx)
                 assert "%3" in out
-            appendix = reply_instructions(scenario, state)
+            commands = tuple(
+                (path, command)
+                for path in state.agent_commands
+                if (command := reg.command_at(path)) is not None
+            )
+            assert len(commands) == len(state.agent_commands)
+            appendix = reply_instructions(scenario, state, agent_ref="a_test", commands=commands)
             assert "chat_reply" in appendix
 
 
 def test_reply_instructions_for_upgrade_working() -> None:
     reg = load_registry(ROOT / "templates")
     scenario = reg.scenarios["upgrade-bot"]
-    text = reply_instructions(scenario, scenario.states["working"])  # type: ignore[arg-type]
+    state = scenario.states["working"]
+    assert isinstance(state, AgentState)
+    commands = tuple(
+        (path, command)
+        for path in state.agent_commands
+        if (command := reg.command_at(path)) is not None
+    )
+    assert len(commands) == len(state.agent_commands)
+    text = reply_instructions(scenario, state, agent_ref="a_test", commands=commands)
     assert "awaiting_approval" in text and "issue, pr, commit" in text
     assert "必须同时附带 reply" in text and "image" in text
     assert "不会发到群里" in text

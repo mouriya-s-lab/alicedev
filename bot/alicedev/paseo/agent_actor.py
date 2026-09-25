@@ -98,7 +98,8 @@ class AgentActor:
         else:
             await self._messages.claim(
                 msg_ref=msg_ref, chat_key=chat_key, platform_message_id=None,
-                sender_key=sender_key, text=prompt, session_id=session_id, agent_ref=agent_ref,
+                sender_key=sender_key, sender_name=None, content=None, text=prompt,
+                session_id=session_id, agent_ref=agent_ref,
             )
         ingress = build_ingress_command(agent_ref=agent_ref, msg_ref=msg_ref, text=prompt)
         async with self._lock(agent_ref):
@@ -150,6 +151,8 @@ class AgentActor:
         text: str,
         platform_message_id: str | None,
         sender_key: str | None,
+        sender_name: str | None,
+        content: str | None,
     ) -> InjectOutcome:
         async with self._lock(agent.agent_ref):
             current = await self._agents.get(agent.agent_ref)
@@ -160,8 +163,8 @@ class AgentActor:
             msg_ref = new_msg_ref()
             claimed = await self._messages.claim(
                 msg_ref=msg_ref, chat_key=chat_key, platform_message_id=platform_message_id,
-                sender_key=sender_key, text=text, session_id=current.session_id,
-                agent_ref=current.agent_ref,
+                sender_key=sender_key, sender_name=sender_name, content=content, text=text,
+                session_id=current.session_id, agent_ref=current.agent_ref,
             )
             if not claimed.fresh:
                 return InjectOutcome.DUPLICATE

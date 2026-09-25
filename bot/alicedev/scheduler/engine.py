@@ -59,8 +59,34 @@ class StartOutcome(str, Enum):
     CREATED = "created"
     QUEUED = "queued"
     FAILED = "failed"
-    DUPLICATE = "duplicate"  # platform redelivery: already handled, say nothing
+    SENT = "sent"  # one_per_chat: the chat's open session got the text instead
+    BUSY = "busy"  # one_per_chat: that session could not take it now
+    DUPLICATE = "duplicate"  # platform redelivery / CLI retry: already handled, say nothing
     NOTIFIED = "notified"  # ended in main_sync_failed: its state notice (with link) is the reply
+
+
+@dataclass(frozen=True)
+class FromChat:
+    """A person in the chat triggered the start (command or route)."""
+
+    platform_message_id: str | None
+    sender_name: str
+    content: str  # the platform message text as sent
+
+
+@dataclass(frozen=True)
+class FromAgent:
+    """An agent's ``alicedev run`` triggered the start (§6.1)."""
+
+    call_id: str
+    assigned_by: int  # the calling agent's session
+
+    @property
+    def dedupe_key(self) -> str:
+        return f"call:{self.call_id}"
+
+
+Origin = FromChat | FromAgent
 
 
 @dataclass(frozen=True)
@@ -69,7 +95,7 @@ class StartRequest:
     user_key: str
     scenario: str
     input: Mapping[str, Any]  # prompt variables captured at trigger time
-    platform_message_id: str | None
+    origin: Origin
 
 
 @dataclass(frozen=True)
@@ -173,32 +199,43 @@ class Scheduler:
             return StartResult(StartOutcome.FAILED, None, f"未知场景 {req.scenario}")
         from alicedev.ids import new_msg_ref
 
+        match req.origin:
+            case FromChat(platform_message_id=pmid, sender_name=sender_name, content=content):
+                dedupe_key, assigned_by, claim_name, claim_content = pmid, None, sender_name, content
+            case FromAgent(assigned_by=parent) as agent_origin:
+                dedupe_key, assigned_by, claim_name, claim_content = agent_origin.dedupe_key, parent, None, None
+        text = str(req.input.get("text", ""))
         async with self._store.lock:
-            if req.platform_message_id is not None:
+            if dedupe_key is not None:
                 seen = await self._store.fetch_one(
                     "SELECT session_id FROM messages WHERE chat_key = ? AND platform_message_id = ?",
-                    (req.chat_key, req.platform_message_id),
+                    (req.chat_key, dedupe_key),
                 )
                 if seen is not None:
                     existing = await self._sessions.get(int(seen[0])) if seen[0] is not None else None
                     return StartResult(StartOutcome.DUPLICATE, existing)
-            try:
-                title = dsl_api.render(scenario.title, context(TITLE_VARS, dict(req.input)))
-            except Exception:  # noqa: BLE001 - a bad title must not block the session
-                _LOG.exception("title render failed for scenario %s", scenario.name)
-                title = scenario.name
-            row = await self._sessions.create(
-                chat_key=req.chat_key, scenario=scenario.name, name=title,
-                created_by=req.user_key, input=req.input, state=QUEUED,
-            )
-            trigger_ref = new_msg_ref()
-            await self._messages.claim(
-                msg_ref=trigger_ref, chat_key=req.chat_key,
-                platform_message_id=req.platform_message_id, sender_key=req.user_key,
-                text=str(req.input.get("text", "")), session_id=row.session_id, agent_ref=None,
-            )
-            await self._sessions.set_current(req.chat_key, row.session_id)
+            open_one = await self._open_in_chat(scenario, req.chat_key) if scenario.one_per_chat else None
+            if open_one is None:
+                try:
+                    title = dsl_api.render(scenario.title, context(TITLE_VARS, dict(req.input)))
+                except Exception:  # noqa: BLE001 - a bad title must not block the session
+                    _LOG.exception("title render failed for scenario %s", scenario.name)
+                    title = scenario.name
+                row = await self._sessions.create(
+                    chat_key=req.chat_key, scenario=scenario.name, name=title,
+                    created_by=req.user_key, input=req.input, state=QUEUED, assigned_by=assigned_by,
+                )
+                trigger_ref = new_msg_ref()
+                await self._messages.claim(
+                    msg_ref=trigger_ref, chat_key=req.chat_key, platform_message_id=dedupe_key,
+                    sender_key=req.user_key, sender_name=claim_name, content=claim_content,
+                    text=text, session_id=row.session_id, agent_ref=None,
+                )
+                if isinstance(req.origin, FromChat):
+                    await self._sessions.set_current(req.chat_key, row.session_id)
 
+        if open_one is not None:
+            return await self._start_into_open(open_one, req, text)
         async with self._lock(scenario.name):
             if scenario.exclusive and await self._exclusive_busy(scenario, row.session_id):
                 return StartResult(StartOutcome.QUEUED, row)
@@ -209,6 +246,30 @@ class Scheduler:
         if current is not None and current.state == MAIN_SYNC_FAILED:
             return StartResult(StartOutcome.NOTIFIED, current, reason)
         return StartResult(StartOutcome.FAILED, current, reason)
+
+    async def _open_in_chat(self, scenario: Scenario, chat_key: str) -> "SessionRow | None":
+        """``one_per_chat``: the chat's unfinished session of this scenario (caller holds the Store lock)."""
+        for row in await self._sessions.not_in_states(self.ended_states()):
+            if row.chat_key == chat_key and row.scenario == scenario.name:
+                return row
+        return None
+
+    async def _start_into_open(self, row: "SessionRow", req: StartRequest, text: str) -> StartResult:
+        match req.origin:
+            case FromAgent():
+                return StartResult(StartOutcome.FAILED, row, f"本群已有 %{row.no}，agent 不能向它发消息")
+            case FromChat(platform_message_id=pmid, sender_name=sender_name, content=content):
+                result = await self.send(
+                    row, text=text, platform_message_id=pmid, sender_key=req.user_key,
+                    sender_name=sender_name, content=content,
+                )
+        match result:
+            case "ok":
+                return StartResult(StartOutcome.SENT, await self._sessions.get(row.session_id))
+            case "duplicate":
+                return StartResult(StartOutcome.DUPLICATE, row)
+            case _:  # busy, or still being dispatched (not yet conversational)
+                return StartResult(StartOutcome.BUSY, row)
 
     async def _exclusive_busy(self, scenario: Scenario, exclude: int) -> bool:
         ended = self.ended_states()
@@ -362,11 +423,19 @@ class Scheduler:
             case RepoWorkdir():
                 cwd = row.worktree_path or ""
         agent_ref = new_agent_ref()
+        registry = self._registry()
+        commands = tuple(
+            (path, command)
+            for path in state.agent_commands
+            if (command := registry.command_at(path)) is not None
+        )
         try:
             prompt = dsl_api.render(
                 state.prompt, context(PROMPT_VARS, self.prompt_vars(row, scenario, state, agent_ref))
             )
-            prompt = prompt.rstrip() + "\n\n" + dsl_api.reply_instructions(scenario, state)
+            prompt = prompt.rstrip() + "\n\n" + dsl_api.reply_instructions(
+                scenario, state, agent_ref=agent_ref, commands=commands
+            )
         except Exception as exc:  # noqa: BLE001 - render errors are reported, not raised
             _LOG.exception("prompt render failed for %s/%s", scenario.name, state.name)
             return False, f"prompt 渲染失败：{exc}"
@@ -459,7 +528,14 @@ class Scheduler:
         return "ok"
 
     async def send(
-        self, row: "SessionRow", *, text: str, platform_message_id: str | None, sender_key: str
+        self,
+        row: "SessionRow",
+        *,
+        text: str,
+        platform_message_id: str | None,
+        sender_key: str,
+        sender_name: str,
+        content: str,
     ) -> str:
         scenario = self.scenario(row.scenario)
         if scenario is None:
@@ -476,6 +552,7 @@ class Scheduler:
         outcome = await self._actor.inject(
             agent, chat_key=row.chat_key, text=text,
             platform_message_id=platform_message_id, sender_key=sender_key,
+            sender_name=sender_name, content=content,
         )
         match outcome:
             case InjectOutcome.OK:

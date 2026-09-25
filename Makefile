@@ -24,7 +24,7 @@ PASEO_SRC_REF ?= 7ab7c444d
 
 # --- developer machine ----------------------------------------------------------
 
-# Build the omp extension + reply-cli into harness/dist/ (the paseo image builds
+# Build the omp extension + alicedev CLI into harness/dist/ (the paseo image builds
 # them itself in a multi-stage build; this target is for local development).
 harness:
 	cd harness && npm ci && npm run build

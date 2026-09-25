@@ -244,7 +244,7 @@ states:
   - 只有它的 `agent_commands` 能列 admin 权限的指令，也只有它的 agent 能用 `--chat` 操作别的群（§6.1）。
 
 **状态 `kind`**
-- `agent`：进入时在会话工作目录起一个新 agent，首轮 prompt 为该状态模板的渲染结果。带 `reply` 的是**对话态**：AI 的回复按 `reply` 规格进聊天面，群友可以继续对话（`send`），`transition` 可选；不带 `reply` 的是**内部态**：不进聊天面、不接受 `send`，AI 只能报告 `transition`。`next` 列出可报告的目标状态，缺省为空（单对话态场景就是如此）。`agent_commands` 列出这个 agent 能经 `alicedev run` 调用的指令路径（指令名，或 `父指令 子指令`，别名不算），缺省为空；每条路径的动作必须是「agent 可调用」的（§3.2），admin 权限的指令只能出现在 `audience: admin` 的场景里。加载时逐条校验，不合格则拒绝该场景文件。
+- `agent`：进入时在会话工作目录起一个新 agent，首轮 prompt 为该状态模板的渲染结果。带 `reply` 的是**对话态**：AI 的回复按 `reply` 规格进聊天面，群友可以继续对话（`send`），`transition` 可选；不带 `reply` 的是**内部态**：不进聊天面、不接受 `send`，AI 只能报告 `transition`。`next` 列出可报告的目标状态，缺省为空（单对话态场景就是如此）。`agent_commands` 列出这个 agent 能经 `alicedev run` 调用的指令路径（指令名，或 `父指令 子指令`，别名不算），缺省为空；每条路径的动作必须是「agent 可调用」的（§3.2），admin 权限的指令只能出现在 `audience: admin` 的场景里。加载时逐条校验：指向不存在的指令或违反上述规则时拒绝该场景文件；指向的指令文件自身因错误被拒绝时，只是这一条暂不可用，场景照常加载（一条坏指令不连带拖垮列出它的所有场景）。
 - `human`：等待人工指令，`commands` 把人工指令名映射到目标状态（群里怎么发由指令 DSL 的 `human` 动作决定）；可见。
 - `terminal`：会话结束，可见；进入时停掉 agent、有 worktree 则归档、释放独占。
 

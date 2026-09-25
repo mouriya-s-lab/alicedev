@@ -168,6 +168,16 @@ class HelpAction:
     command: ArgName | None
 
 
+@dataclass(frozen=True)
+class ChatsAction:
+    """群列表: chats with sessions plus ``allowed_chats`` (§3.2)."""
+
+
+@dataclass(frozen=True)
+class StatusAction:
+    """Bot status card, same source as ``/v1/status`` (§3.2)."""
+
+
 Action = Union[
     StartAction,
     GithubAction,
@@ -180,14 +190,29 @@ Action = Union[
     ShareAction,
     FavoriteAction,
     ListAction,
+    ChatsAction,
+    StatusAction,
     HelpAction,
 ]
 
 AI_ACTIONS: tuple[type, ...] = (StartAction, GithubAction, SendAction)
 
+# Actions an agent may invoke through ``alicedev run`` (§3.2 "agent 可调用").
+AGENT_ACTIONS: tuple[type, ...] = (
+    StartAction,
+    GithubAction,
+    SessionShowAction,
+    SessionRenameAction,
+    SessionArchiveAction,
+    FavoriteAction,
+    ListAction,
+    ChatsAction,
+    StatusAction,
+)
+
 # Fixed result keys per action (``say`` may only override these).
 RESULT_KEYS: Mapping[type, tuple[str, ...]] = {
-    StartAction: ("created", "queued", "failed"),
+    StartAction: ("created", "queued", "failed", "sent", "busy"),
     GithubAction: ("created", "fetch_failed", "failed"),
     SendAction: ("ok", "not_found", "not_conversational", "busy"),
     SessionShowAction: ("not_found",),
@@ -198,6 +223,8 @@ RESULT_KEYS: Mapping[type, tuple[str, ...]] = {
     ShareAction: ("ok", "not_found", "not_ready"),
     FavoriteAction: ("ok", "image_failed"),
     ListAction: ("empty",),
+    ChatsAction: (),
+    StatusAction: (),
     HelpAction: ("not_found",),
 }
 
@@ -260,6 +287,11 @@ class RepoWorkdir:
 Workdir = Union[CwdWorkdir, RepoWorkdir]
 
 
+class Audience(str, Enum):
+    ALL = "all"
+    ADMIN = "admin"  # admin-only input; may list admin commands and act on other chats (§3.4)
+
+
 @dataclass(frozen=True)
 class AgentState:
     name: str
@@ -268,6 +300,7 @@ class AgentState:
     next: tuple[str, ...] = ()
     data: tuple[str, ...] = ()
     share: bool = False
+    agent_commands: tuple[str, ...] = ()  # command paths ("会话列表 全部") callable via alicedev run
 
     @property
     def conversational(self) -> bool:
@@ -319,6 +352,8 @@ class Scenario:
     initial: str
     states: Mapping[str, State]
     exclusive: bool = False
+    one_per_chat: bool = False
+    audience: Audience = Audience.ALL
     source: SourceRef | None = None
 
     def state(self, name: str) -> State:
@@ -349,3 +384,16 @@ class Registry:
         for cmd in self.commands.values():
             seen.setdefault(cmd.name, cmd)
         return [seen[k] for k in sorted(seen)]
+
+    def command_at(self, path: str) -> Command | None:
+        """The command (or subcommand) at a canonical path like ``会话列表 全部``; aliases don't count."""
+        head, *rest = path.split()
+        cmd = self.commands.get(head)
+        if cmd is None or cmd.name != head:
+            return None
+        for word in rest:
+            sub = cmd.subcommands.get(word)
+            if sub is None or sub.name != word:
+                return None
+            cmd = sub
+        return cmd

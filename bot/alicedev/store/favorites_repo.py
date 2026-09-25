@@ -107,6 +107,17 @@ class FavoritesRepo:
             f"SELECT {_COLUMNS} FROM favorites WHERE id = ?", (record_id,)
         )
         return _row_to_record(row) if row else None
+    async def by_platform_message_id(
+        self, chat_key: str, platform_message_id: str
+    ) -> FavoriteRecord | None:
+        """Find the newest favorite for a platform message in one chat."""
+        row = await self._store.fetch_one(
+            f"SELECT {_COLUMNS} FROM favorites "
+            "WHERE chat_key = ? AND platform_message_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (chat_key, platform_message_id),
+        )
+        return _row_to_record(row) if row is not None else None
 
     async def count(self, chat_key: str) -> int:
         row = await self._store.fetch_one(

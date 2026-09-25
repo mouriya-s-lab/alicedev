@@ -1,16 +1,16 @@
 import { build } from "esbuild";
-import { chmod, copyFile, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dist = join(root, "dist");
 const extensionDist = join(dist, "omp-extension");
-const replyDist = join(dist, "reply-cli");
+const cliDist = join(dist, "cli");
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(extensionDist, { recursive: true });
-await mkdir(replyDist, { recursive: true });
+await mkdir(cliDist, { recursive: true });
 
 await build({
 	entryPoints: [join(root, "omp-extension/index.ts")],
@@ -28,7 +28,19 @@ await writeFile(
 	"utf8",
 );
 
-const replySource = join(root, "reply-cli/index.mjs");
-const replyTarget = join(replyDist, "alicedev-reply");
-await copyFile(replySource, replyTarget);
-await chmod(replyTarget, 0o755);
+const cliSource = join(root, "cli/index.mjs");
+const cliTarget = join(cliDist, "alicedev");
+await copyFile(cliSource, cliTarget);
+await chmod(cliTarget, 0o755);
+
+const skillsSource = join(root, "skills");
+let skillsStats;
+try {
+	skillsStats = await stat(skillsSource);
+} catch (error) {
+	if (error.code !== "ENOENT") throw error;
+}
+if (skillsStats !== undefined) {
+	if (!skillsStats.isDirectory()) throw new Error("harness/skills must be a directory");
+	await cp(skillsSource, join(extensionDist, "skills"), { recursive: true });
+}

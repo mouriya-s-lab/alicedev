@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Sequence
+
 from alicedev.dsl.model import (
     AgentState,
+    Command,
     HumanState,
     ReplySpec,
     Scenario,
@@ -14,7 +17,10 @@ from alicedev.dsl.model import (
 _HEADER = "---\n## 回复方式（alicedev）"
 
 
-def reply_instructions(scenario: Scenario, state: AgentState) -> str:
+def reply_instructions(
+    scenario: Scenario, state: AgentState, *, agent_ref: str, commands: Sequence[tuple[str, Command]]
+) -> str:
+    """``commands``: the state's ``agent_commands`` as (path, command), in declared order."""
     lines: list[str] = [_HEADER, ""]
     lines.append("你只能通过 `chat_reply` 工具与群聊和 bot 通信；调用成功之前不要结束本轮。")
     lines.append("`chat_reply` 的参数是 `{ reply?, transition? }`，两者至少带一个。")
@@ -40,7 +46,22 @@ def reply_instructions(scenario: Scenario, state: AgentState) -> str:
             lines.extend(_target_lines(scenario, target_name))
     else:
         lines.append("本状态没有可报告的下一个状态，只需要用 `reply` 回复群聊。")
+    if commands:
+        lines.append("")
+        lines.extend(_command_lines(agent_ref, commands))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _command_lines(agent_ref: str, commands: Sequence[tuple[str, Command]]) -> list[str]:
+    lines = [
+        "### 可用指令（alicedev run）",
+        f"你可以代表本会话的发起人调用下面的 bot 指令。你的 agent 标识是 `{agent_ref}`，调用方法见 skill `alicedev`：",
+        f"`alicedev run --agent {agent_ref} '<指令行>'`（先用 `alicedev commands --agent {agent_ref}` 看参数说明）。",
+    ]
+    for path, command in commands:
+        lines.append(f"- `{command.usage}`（{path}）：{command.summary}")
+    lines.append("调用结果会写明做了什么；开会话、收藏这类操作 bot 会在群里留痕，你不需要再转述一遍。")
+    return lines
 
 
 def _spec_lines(spec: ReplySpec) -> list[str]:

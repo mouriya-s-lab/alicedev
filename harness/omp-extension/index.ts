@@ -143,7 +143,7 @@ export default function alicedev(pi: ExtensionAPI): void {
 				JSON.stringify(request),
 			];
 			try {
-				const result = await pi.exec("alicedev-reply", args);
+				const result = await pi.exec("alicedev", ["reply", ...args]);
 				const status =
 					result.code === 0
 						? parseReplySuccess(result.stdout.trim() ? JSON.parse(result.stdout) : undefined)

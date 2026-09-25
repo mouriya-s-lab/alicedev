@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from alicedev.dsl.model import (
     RESULT_KEYS,
+    ChatsAction,
     FavoriteAction,
     GithubAction,
     HelpAction,
@@ -16,6 +17,7 @@ from alicedev.dsl.model import (
     SessionSwitchAction,
     ShareAction,
     StartAction,
+    StatusAction,
 )
 
 ACTION_NAMES: dict[type, str] = {
@@ -30,6 +32,8 @@ ACTION_NAMES: dict[type, str] = {
     ShareAction: "share",
     FavoriteAction: "favorite",
     ListAction: "list",
+    ChatsAction: "chats",
+    StatusAction: "status",
     HelpAction: "help",
 }
 

@@ -31,7 +31,8 @@ def test_help_card_groups_ai_and_program() -> None:
     assert name == "help"
     ai, program = fields["groups"]
     ai_usages = [e["usage"] for e in ai["entries"]]
-    assert "/继续 [%会话] <内容>" in ai_usages and len(ai_usages) == 5
+    assert "/继续 [%会话] <内容>" in ai_usages
+    assert "/管家 <内容>" in ai_usages and len(ai_usages) == 6
     program_usages = [e["usage"] for e in program["entries"]]
     assert "/升级bot approve [%会话]" in program_usages
     assert "/会话列表 全部 [页]" in program_usages

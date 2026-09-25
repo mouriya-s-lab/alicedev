@@ -1,6 +1,6 @@
 """ReplyPayload ADT and boundary parsing (ARCHITECTURE §6).
 
-The reply-cli posts an untyped JSON body; :func:`parse_reply_payload` turns it
+The `alicedev reply` subcommand posts an untyped JSON body; :func:`parse_reply_payload` turns it
 into a precise domain variant or raises :class:`InvalidPayload`. Internal code
 only ever handles the parsed variants.
 """

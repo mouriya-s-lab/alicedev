@@ -43,8 +43,10 @@ from alicedev.paseo.sweeper import IdleSweeper  # noqa: E402
 from alicedev.render.cards import CardRenderer  # noqa: E402
 from alicedev.reports import ReportPublisher  # noqa: E402
 from alicedev.scheduler.engine import Scheduler  # noqa: E402
+from alicedev.status import BotStatus  # noqa: E402
 from alicedev.store.agents_repo import AgentsRepo  # noqa: E402
 from alicedev.store.db import Store  # noqa: E402
+from alicedev.store.exchanges_repo import ExchangesRepo  # noqa: E402
 from alicedev.store.favorites_repo import FavoritesRepo  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
@@ -119,6 +121,7 @@ class AliceDevPlugin(Star):
         agents = AgentsRepo(store)
         messages = MessagesRepo(store)
         favorites = FavoritesRepo(store)
+        exchanges = ExchangesRepo(store)
 
         paseo = CliPaseoControl(
             container=config.paseo_container, paseo_bin=config.paseo_bin,
@@ -140,16 +143,17 @@ class AliceDevPlugin(Star):
             reports=ReportPublisher(store=store, config=config), renderer=renderer,
             scheduler=scheduler, config=config,
         )
-        self._api = InternalApi(
-            config=config, intake=intake, sessions=sessions, agents=agents, scheduler=scheduler,
-            outbox=outbox, registry=self._current_registry, platforms_fn=self._platform_names,
-            generation=_next_generation(data_dir),
-        )
         self._dispatcher = Dispatcher(
             config=config, store=store, sessions=sessions, favorites=favorites,
             scheduler=scheduler, outbox=outbox,
             github=GithubClient(config.github_token, config.default_repo),
-            registry=self._current_registry,
+            registry=self._current_registry, agents=agents, exchanges=exchanges,
+            status_fn=self._bot_status,
+        )
+        self._api = InternalApi(
+            config=config, intake=intake, sessions=sessions, agents=agents, scheduler=scheduler,
+            outbox=outbox, registry=self._current_registry, platforms_fn=self._platform_names,
+            generation=_next_generation(data_dir), dispatcher=self._dispatcher,
         )
         self._sweeper = IdleSweeper(
             agents=agents, actor=actor, config=config,
@@ -186,6 +190,10 @@ class AliceDevPlugin(Star):
             await self._outbox.stop()
         if self._store is not None:
             await self._store.close()
+
+    async def _bot_status(self) -> BotStatus:
+        assert self._api is not None
+        return await self._api.bot_status()
 
     def _platform_names(self) -> list[str]:
         try:

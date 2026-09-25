@@ -18,7 +18,7 @@ WORKDIR /src/harness
 COPY harness/package.json harness/package-lock.json ./
 RUN npm ci
 COPY harness/ ./
-RUN npm run build && test -f dist/omp-extension/index.js && test -x dist/reply-cli/alicedev-reply
+RUN npm run build && test -f dist/omp-extension/index.js && test -x dist/cli/alicedev
 
 FROM ${PASEO_BASE_IMAGE}
 
@@ -84,13 +84,13 @@ RUN set -eux; \
 ENV PATH=/opt/alicedev/pyenv/bin:$PATH
 
 COPY --from=harness /src/harness/dist/omp-extension/ /opt/alicedev/omp-extension/
-COPY --from=harness /src/harness/dist/reply-cli/alicedev-reply /opt/alicedev/reply-cli/alicedev-reply
+COPY --from=harness /src/harness/dist/cli/alicedev /opt/alicedev/cli/alicedev
 COPY deploy/paseo/entrypoint-hook.sh /usr/local/bin/alicedev-paseo-entrypoint
 COPY deploy/paseo/paseo-config.json /opt/alicedev/paseo-config.json
 
 RUN set -eux; \
-    chmod +x /opt/alicedev/reply-cli/alicedev-reply /usr/local/bin/alicedev-paseo-entrypoint; \
-    ln -sf /opt/alicedev/reply-cli/alicedev-reply /usr/local/bin/alicedev-reply; \
+    chmod +x /opt/alicedev/cli/alicedev /usr/local/bin/alicedev-paseo-entrypoint; \
+    ln -sf /opt/alicedev/cli/alicedev /usr/local/bin/alicedev; \
     existing="$(getent group "${DOCKER_GID}" | cut -d: -f1 || true)"; \
     if [ -z "${existing}" ]; then groupadd --gid "${DOCKER_GID}" docker-host; existing=docker-host; fi; \
     usermod -aG "${existing}" paseo; \

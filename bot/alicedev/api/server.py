@@ -16,10 +16,13 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from aiohttp import web
 
+from alicedev.actions.executor import AgentCall
 from alicedev.dsl.model import AgentState, Registry
 from alicedev.render import views
+from alicedev.status import BotStatus, collect_status, status_json
 
 if TYPE_CHECKING:
+    from alicedev.actions.executor import Dispatcher
     from alicedev.api.intake import ReplyIntake
     from alicedev.config import PluginConfig
     from alicedev.outbox.service import Outbox
@@ -53,9 +56,11 @@ class InternalApi:
         registry: Callable[[], Registry],
         platforms_fn: Callable[[], list[str]],
         generation: int,
+        dispatcher: "Dispatcher",
     ) -> None:
         self._config = config
         self._intake = intake
+        self._dispatcher = dispatcher
         self._sessions = sessions
         self._agents = agents
         self._scheduler = scheduler
@@ -69,6 +74,8 @@ class InternalApi:
         self._app.add_routes(
             [
                 web.post("/v1/reply", self._handle_reply),
+                web.get("/v1/commands", self._handle_commands),
+                web.post("/v1/commands", self._handle_run),
                 web.get("/v1/agents/{agent}", self._handle_agent),
                 web.get("/v1/sessions/{session_id}", self._handle_session),
                 web.get("/v1/status", self._handle_status),
@@ -136,25 +143,22 @@ class InternalApi:
     async def _handle_health(self, request: web.Request) -> web.StreamResponse:
         return web.json_response({"generation": self._generation, "revision": self._revision})
 
-    async def _handle_status(self, request: web.Request) -> web.StreamResponse:
-        registry = self._registry()
-        sessions = await self._sessions.counts(self._scheduler.ended_states())
-        agents = await self._agents.counts()
-        return web.json_response(
-            {
-                "ok": not self._draining,
-                "generation": self._generation,
-                "revision": self._revision,
-                "uptime_s": int(time.monotonic() - self._started_at),
-                "platforms": self._platforms_fn(),
-                "commands": [c.name for c in registry.command_list()],
-                "scenarios": sorted(registry.scenarios),
-                "dsl_errors": [asdict(e) for e in registry.errors],
-                "sessions": sessions,
-                "agents": {"active": agents.get("active", 0), "closed": agents.get("closed", 0)},
-                "outbox_pending": await self._outbox.repo.pending_count(),
-            }
+    async def bot_status(self) -> "BotStatus":
+        """The bot status also shown by the /状态 card (§3.2)."""
+        return await collect_status(
+            registry=self._registry(),
+            sessions=self._sessions,
+            agents=self._agents,
+            outbox=self._outbox,
+            platforms_fn=self._platforms_fn,
+            generation=self._generation,
+            revision=self._revision,
+            started_at=self._started_at,
+            ended_states=self._scheduler.ended_states(),
         )
+
+    async def _handle_status(self, request: web.Request) -> web.StreamResponse:
+        return web.json_response({"ok": not self._draining, **status_json(await self.bot_status())})
 
     async def _handle_agent(self, request: web.Request) -> web.StreamResponse:
         agent = await self._agents.get(request.match_info["agent"])
@@ -197,4 +201,47 @@ class InternalApi:
         except Exception:  # noqa: BLE001
             return web.json_response({"error": "invalid_payload"}, status=400)
         result = await self._intake.handle(body)
+        return web.json_response(dict(result.body), status=result.status)
+
+    async def _handle_commands(self, request: web.Request) -> web.StreamResponse:
+        agent_ref = request.query.get("agent")
+        if not agent_ref:
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        result = await self._dispatcher.agent_commands(agent_ref)
+        return web.json_response(dict(result.body), status=result.status)
+
+    async def _handle_run(self, request: web.Request) -> web.StreamResponse:
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            return web.json_response({"error": "invalid_payload"}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        agent_ref = body.get("agent")
+        call_id = body.get("call_id")
+        text = body.get("text")
+        chat_key = body.get("chat")
+        quote = body.get("quote")
+        if (
+            not isinstance(agent_ref, str)
+            or not agent_ref
+            or not isinstance(call_id, str)
+            or not call_id
+            or not isinstance(text, str)
+            or not text
+            or ("chat" in body and not isinstance(chat_key, str))
+            or ("quote" in body and not isinstance(quote, str))
+        ):
+            return web.json_response({"error": "invalid_payload"}, status=400)
+
+        result = await self._dispatcher.run_agent(
+            AgentCall(
+                agent_ref=agent_ref,
+                call_id=call_id,
+                text=text,
+                chat_key=chat_key,
+                quote=quote,
+            )
+        )
         return web.json_response(dict(result.body), status=result.status)

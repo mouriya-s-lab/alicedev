@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Union
+from typing import TYPE_CHECKING, Any, Mapping, Union
 
 from alicedev.domain import SessionView
 from alicedev.dsl.model import Action, AgentState, Command, Registry, Scenario, Tmpl
+
+if TYPE_CHECKING:
+    from alicedev.status import BotStatus
+    from alicedev.store.sessions_repo import KnownChat
 
 
 @dataclass(frozen=True)
@@ -73,10 +77,12 @@ def parse_args(matched: Matched) -> ArgsResult:
     return ArgsOk(dict(result.values))
 
 
-def reply_instructions(scenario: Scenario, state: AgentState) -> str:
+def reply_instructions(
+    scenario: Scenario, state: AgentState, *, agent_ref: str, commands: tuple[tuple[str, Command], ...]
+) -> str:
     from alicedev.dsl.reply_instructions import reply_instructions as _ri
 
-    return _ri(scenario, state)
+    return _ri(scenario, state, agent_ref=agent_ref, commands=commands)
 
 
 def message_key(action: Action, result: str) -> str:
@@ -131,3 +137,15 @@ def favorites_list_card(
     from alicedev.render import views
 
     return views.favorites_list_card(rows, page, pages, command=command)
+
+
+def status_card(status: BotStatus) -> tuple[str, dict[str, Any]]:
+    from alicedev.render import views
+
+    return views.status_card(status)
+
+
+def chats_card(chats: list[KnownChat], allowed: tuple[str, ...]) -> tuple[str, dict[str, Any]]:
+    from alicedev.render import views
+
+    return views.chats_card(chats, allowed)

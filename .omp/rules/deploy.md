@@ -10,7 +10,7 @@ alwaysApply: false
 ## 1. 硬规则
 
 1. **闸门**：动生产（`deploy` 项目、宿主检出、paseo 工作区、镜像、QQ/TG 登录态）前，先说清做什么、影响谁、如何回滚，再做。零改动的只读核查不需要闸门。
-2. **只部署 main**：上线的一律是 main 上已合入的提交，用完整 40 位 SHA（短 SHA 在 fetch 时找不到 ref）。功能分支先过真实 e2e，再合 main。
+2. **线上停在 main**：线上的 bot 检出与镜像源都是 main 上已合入的提交，用完整 40 位 SHA（短 SHA 在 fetch 时找不到 ref）。唯一例外是合并前的生产 e2e（AGENTS §3）：需要真 AI、真 daemon 才能验证的功能，可以把已推送的功能分支完整 SHA 部署到生产做验收；验收通过就合 main，并把线上切到合并后的 main SHA；不通过就按 §7 回滚，线上不长期停在功能分支上。
 3. **一类改动一条路径**：按 §4 的表上线。不手工拷文件，不在宿主检出里改文件；`deployctl apply/run/rollback` 只以 uid 1000 运行（在 paseo 容器里以 `paseo` 用户跑，或经 `deployrun`），root 跑会留下 owner 改写不了的 git 文件。
 4. **bot 部署不动 paseo**：`bot/`、`templates/` 上线只切检出并热重载插件；paseo 镜像只在 §4 对应行更新。
 5. **先打回滚标签再构建**：构建任何镜像前，给当前镜像打 `:rollback-<tag>`。

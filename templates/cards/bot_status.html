@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=800">
+  <title>alicedev 运行状态</title>
+  <style>
+    :root { --ink:#172033; --muted:#667085; --accent:#3767d6; --line:#e4e8f0; --wash:#f7f9fc; --good:#1c7a52; --error:#aa3344; }
+    * { box-sizing:border-box; }
+    html, body { margin:0; padding:0; }
+    body {
+      width:800px; padding:30px; background:var(--wash); color:var(--ink);
+      font-family:"WenQuanYi Zen Hei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      font-size:19px; line-height:1.45; -webkit-font-smoothing:antialiased;
+    }
+    .card { overflow:hidden; border:1px solid var(--line); border-radius:22px; background:#fff; box-shadow:0 8px 28px rgba(25,39,72,.08); }
+    header { padding:24px 28px 20px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--accent); font-size:16px; font-weight:700; letter-spacing:.08em; }
+    h1 { margin:4px 0 0; font-size:31px; line-height:1.25; }
+    .subhead { margin-top:7px; color:var(--muted); font-size:16px; }
+    main { padding:20px 24px 24px; }
+    section + section { margin-top:22px; }
+    h2 { margin:0 0 10px; font-size:18px; }
+    .platforms { display:flex; flex-wrap:wrap; gap:8px; }
+    .platform { padding:5px 12px; border-radius:99px; background:#eef3ff; color:#3557a2; font-size:16px; }
+    .empty { color:var(--muted); font-size:16px; }
+    .metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+    .metric { min-width:0; padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:#fbfcfe; }
+    .label { color:var(--muted); font-size:14px; }
+    .value { display:block; margin-top:3px; overflow-wrap:anywhere; font-size:25px; font-weight:700; }
+    .agents { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }
+    .agent { padding:3px 8px; border-radius:7px; background:#f0f2f6; color:#485365; font-size:14px; }
+    .errors-head { display:flex; align-items:baseline; gap:8px; }
+    .errors-count { color:var(--error); font-weight:700; }
+    .error { padding:10px 12px; border:1px solid #f0d9dc; border-radius:10px; background:#fffafb; }
+    .error + .error { margin-top:8px; }
+    .error-source { color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
+    .error-message { margin-top:3px; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; }
+    .no-errors { color:var(--good); font-size:16px; }
+    .more-errors { margin-top:8px; color:var(--muted); font-size:14px; }
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header>
+      <div class="eyebrow">alicedev · 运行状态</div>
+      <h1>{{ title }}</h1>
+      <div class="subhead">generation {{ generation }} · revision {{ revision }} · 运行 {{ uptime }}</div>
+    </header>
+    <main>
+      <section>
+        <h2>连接平台</h2>
+        {% if platforms %}
+        <div class="platforms">
+          {% for platform in platforms %}<span class="platform">{{ platform }}</span>{% endfor %}
+        </div>
+        {% else %}<div class="empty">暂无已连接平台</div>{% endif %}
+      </section>
+      <section>
+        <h2>运行计数</h2>
+        <div class="metrics">
+          <article class="metric"><span class="label">指令</span><strong class="value">{{ commands_count }}</strong></article>
+          <article class="metric"><span class="label">场景</span><strong class="value">{{ scenarios_count }}</strong></article>
+          <article class="metric"><span class="label">进行中会话</span><strong class="value">{{ sessions_active }}</strong></article>
+          <article class="metric"><span class="label">排队会话</span><strong class="value">{{ sessions_queued }}</strong></article>
+          <article class="metric"><span class="label">待发送消息</span><strong class="value">{{ outbox_pending }}</strong></article>
+          {% for agent in agents %}
+          <article class="metric"><span class="label">Agent · {{ agent.status }}</span><strong class="value">{{ agent.count }}</strong></article>
+          {% endfor %}
+        </div>
+      </section>
+      <section>
+        <div class="errors-head"><h2>DSL 错误</h2><span class="errors-count">{{ dsl_error_count }}</span></div>
+        {% if dsl_errors %}
+          {% for error in dsl_errors %}
+          <article class="error">
+            <div class="error-source">{{ error.path }}:{{ error.line }}</div>
+            <div class="error-message">{{ error.message }}</div>
+          </article>
+          {% endfor %}
+          {% if dsl_errors_remaining %}<div class="more-errors">另有 {{ dsl_errors_remaining }} 条未展示</div>{% endif %}
+        {% else %}<div class="no-errors">当前没有 DSL 错误</div>{% endif %}
+      </section>
+    </main>
+  </section>
+</body>
+</html>
