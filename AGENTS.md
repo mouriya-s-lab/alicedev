@@ -14,7 +14,7 @@
 1. **monorepo**：所有 alicedev 代码只在本仓库。paseo 按上游原样使用，**不 fork、不改源码**；alicedev 只在其外面叠加运行配置（harness 产物、provider 配置，ARCHITECTURE §11）。
 2. **paseo daemon 是已部署、不可修改的基础设施，只是一个 daemon**。被动响应；通过 RPC 驱动各 harness（omp / pi / claude / codex）并自行整理 agent 产出与状态。
    - **bot → daemon 的唯一接触面是 paseo CLI**（`paseo workspace create/archive`、`paseo run`、`paseo send`、`paseo inspect`、`paseo ls`、`paseo stop`、`paseo archive`，全部 `--json`），bot 经 `tools/paseoctl` shim 跨容器（`docker exec -u paseo alicedev-paseo paseo …`）调用；bot 只读 CLI 的 JSON 结果。**禁止 MCP、禁止 WS、禁止自写 daemon 协议客户端。**
-   - **agent → bot 的唯一通道是回复**（`alicedev-reply` → `POST /v1/reply`）。bot 不读 agent transcript。
+   - **agent → bot 的唯一通道是 `alicedev` CLI**：`alicedev reply` → `POST /v1/reply` 回复群聊；`alicedev run` → `POST /v1/commands` 执行所在状态 `agent_commands` 允许的指令（ARCHITECTURE §6.1）。bot 不读 agent transcript。
    - **调度是 bot 的事，AI 是执行者**：agent 里的 AI **不碰 paseo CLI、不起 agent、不推进流程**；会话状态由 AI 通过回复的结构化 `transition` 字段报告，bot 调度校验后推进（ARCHITECTURE §6/§7）。**禁止**直接驱动 harness（`pi`、`omp` 命令行、`--output-schema`）、**禁止**解析模型自由文本当状态、**禁止**在 paseo home 里临时改 provider。
    - omp 与 pi 是两套不同的 harness（omp 建在 pi 底层之上），不可互换；本 session 自己跑在 omp 里，paseo 里的 agent 按场景 DSL 的 `provider`（daemon provider 配置里的 id）跑。
 3. **bot 侧三件事分开**：传输（入站交给指令或路由；出站是消息队列，AI 与 bot 自己入队、平台适配器出队）、调度（会话状态机，场景 = 工作目录或挂钩仓库与 worktree 生命周期 + 状态机 + 状态 prompt；声明独占的场景一次只处理一个会话）、可见性（只有场景声明为可见的状态进聊天）。讨论任何一件时不要把另两件搅进来。

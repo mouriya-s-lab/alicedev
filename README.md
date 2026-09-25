@@ -1,13 +1,13 @@
 # alicedev
 
-OpenAlice（https://github.com/TraderAlice/OpenAlice）开发者社区的 QQ / Telegram 机器人，以 AstrBot 插件形态运行，作用是把群聊接到 paseo 里的 agent 开发环境。群里的指令分两类：程序指令由 bot 自己处理（会话管理、列表、帮助、分享、审批），AI 指令交给 paseo 里的 agent，产生一个用户可见的**会话**（`%n`）。`/需求`、`/帮我调查`、`/解读` 这类单对话场景，和 `/升级bot`（issue → PR → 审批 → merge → 部署）这类多状态场景，都用 `templates/` 下的 YAML DSL 声明。
+OpenAlice（https://github.com/TraderAlice/OpenAlice）开发者社区的 QQ / Telegram 机器人，以 AstrBot 插件形态运行，作用是把群聊接到 paseo 里的 agent 开发环境。群里的指令分两类：程序指令由 bot 自己处理（会话管理、列表、帮助、分享、审批），AI 指令交给 paseo 里的 agent，产生一个用户可见的**会话**（`%n`）。`/需求`、`/帮我调查`、`/解读` 这类单对话场景，和 `/升级bot`（issue → PR → 审批 → merge → 部署）这类多状态场景，都用 `templates/` 下的 YAML DSL 声明。会话里的 agent 也能经 `alicedev` CLI 调用所在状态允许的指令；管理员用 `/管家` 开一个管家会话，让它分诊、指派研究、查看各群会话。
 
 ```mermaid
 flowchart LR
   chat[QQ / Telegram 群聊] -->|指令 / 消息| bot[astrbot: alicedev 插件<br/>传输 · 调度 · 可见性]
   bot -->|paseoctl → paseo CLI --json| paseo[paseo daemon]
   paseo -->|运行| agent[agent: omp + 场景 prompt]
-  agent -->|alicedev-reply → POST /v1/reply<br/>含 transition| bot
+  agent -->|alicedev reply / run → /v1/reply、/v1/commands| bot
   bot -->|出站队列| chat
   bot -->|一次性分享链接| gateway[gateway]
   gateway -->|兑换后代理| paseo
@@ -31,7 +31,7 @@ flowchart LR
 ```
 bot/        AstrBot 插件（DSL 加载与校验、动作、调度、paseo 控制、出站队列、DuckDB、卡片渲染、内部 API）
 templates/  指令、路由、场景、回话、卡片的 DSL
-harness/    paseo 里 agent 用的 omp 扩展与 alicedev-reply CLI
+harness/    paseo 里 agent 用的 omp 扩展、alicedev CLI 与 skill
 gateway/    分享链接兑换、paseo 代理、报告发布
 tools/      跨容器 shim 与运维 CLI
 deploy/     compose 与各容器的 Dockerfile / 配置（生产、dev、e2e、tg-cli）
