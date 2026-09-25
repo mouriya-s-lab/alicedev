@@ -407,7 +407,7 @@ def chats_card(chats: list[KnownChat], allowed: tuple[str, ...]) -> Card:
         "rows": [
             {
                 "chat_key": chat_key,
-                "name": name,
+                "name": "" if name == chat_key else name,  # private chats record the key as their name
                 "open_sessions": open_sessions,
                 "last_activity_at": _time(last_activity_at),
             }
