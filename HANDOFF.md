@@ -1,6 +1,6 @@
 # alicedev — 交接文档
 
-> 新 session 顺序：先读 `AGENTS.md`，再读 `ARCHITECTURE.md`（契约），再读本文件（线上状态、待决事项、已知缺口）。运维步骤在 `docs/runbook.md`，验收证据在 `docs/evidence/`。
+> 新 session 顺序：先读 `AGENTS.md`，再读 `ARCHITECTURE.md`（契约），再读本文件（线上状态、待决事项、已知缺口）。部署规则在 `.omp/rules/deploy.md`，其余运维在 `docs/runbook.md`，验收证据在 `docs/evidence/`。
 
 ## 1. 工作方式约束（用户明确要求）
 
@@ -15,14 +15,15 @@
 
 开发者社区（维护 OpenAlice: https://github.com/TraderAlice/OpenAlice）的 QQ/Telegram 机器人，AstrBot 插件形态，本质是「群聊 ↔ paseo agent 开发环境」的桥接层。契约见 `ARCHITECTURE.md` §0 五条不变量。
 
-## 3. 线上现状（nekoringo2，2026-09-23）
+## 3. 线上现状（nekoringo2，2026-09-25）
 
 - **版本**：`feat/upgrade-bot-loop` 已快进合入 `main`；宿主检出 `/srv/alicedev/app`、bot `/v1/health` 的 `revision`、nekoringo-iac `apps/alicedev` 的 `alicedev_revision` 都是 main 的最新提交（核对：`deployctl status --app /deploy/app`）。
 - **容器**：`deploy` 项目 `caddy` `gateway` `astrbot` `snowluma` `paseo` `t2i` 常驻；`alicedev-e2e`（`init` + `astrbot` + `t2i`）与 `alicedev-tg-cli` 两个独立项目常驻。镜像：`alicedev/paseo:local`（上游 `mouriya-s-lab/paseo@7ab7c444d` 原样构建的基础镜像 + 运行层）、`alicedev/astrbot:local`（预装插件依赖）、`alicedev/gateway:local`。
 - **数据**：DuckDB schema v3 迁移完成（旧会话、当前指针、需求列表都迁入，%1–%4 为旧会话）。
 - **fixed-main** `/workspace/alicedev`：干净，停在 `80161d5`；下一个 `/升级bot` 派发时由 `mainsync` 快进。
 - **Telegram**：`alicedev-tg-cli` 用自己的授权（本机会话批准的 QR 登录，账号 865341181）；验收私聊 `RIRI OuO` ↔ `@ririOuObot`。
-- **QQ**：snowluma 在跑，**QQ 账号尚未扫码登录**（人工步骤，见 runbook §7）。
+- **QQ**：snowluma 在跑，**QQ 账号尚未扫码登录**（人工步骤，见 runbook §3）。
+- **2026-09-25 宿主故障已处理**：一个 9-20 起的孤儿 `tcpdump -w /tmp/nbx-final-direct-cycle1.pcap`（netbird 调试遗留，文件已删、句柄未关）写满 3.9G 的 `/tmp` tmpfs，runc 无法 `docker exec`，从 9-25 01:07 起全部容器 unhealthy、`paseoctl` 失效。停掉该进程后恢复；TG 上程序指令、AI 指令新开会话与补充、`/链接` 浏览器进入工作区、`/归档` 都已真实跑通（`docs/evidence/deploy-nekoringo2/70-post-outage-tg-acceptance.md`）。预防写进 `.omp/rules/deploy.md` §1、§3。
 - **AstrBot dashboard**：记录在案的密码都返回 401，当前密码未知。`deployctl` 热重载用的是插件权限 API key（`ASTRBOT_API_KEY`，已进 SOPS，宿主副本 `/root/alicedev-astrbot-api-key`），不依赖 dashboard 密码。
 - **回滚物**：`/srv/alicedev/backups/pre-v3-<ts>/`（v3 前的 DuckDB、`paseo_home`、旧 `bot/` `deploy/` `templates/`、镜像 ID）；镜像标签 `alicedev/{paseo,gateway}:rollback-pre-v3`、`alicedev/{paseo,astrbot,gateway}:rollback-pre-a49ad63`、`alicedev/paseo:rollback-pre-f7ef76f`、`alicedev/gateway:rollback-pre-boot`、`alicedev/gateway:rollback-pre-alice`（Alice 主题之前的网关）。
 - **分享链接与网关页面**：已上线 Alice 主题（ARCHITECTURE §8）。兑换链接后落到本会话的会话页，从那里进入 paseo 工作区；bot 为此提供 `GET /v1/sessions/{id}`。网关镜像只由网关自己的 `docker compose … build gateway` 与 `up -d --no-deps gateway` 更新；重启网关会使尚未兑换的一次性链接失效。

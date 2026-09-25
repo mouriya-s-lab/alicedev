@@ -491,6 +491,8 @@ harness/core/ harness/omp-extension/ harness/reply-cli/
 gateway/
 deploy/                   docker-compose.yml, dev/, e2e/, tg-cli/, astrbot/, paseo/
 docs/research/ docs/runbook.md docs/evidence/
+.omp/rules/deploy.md      部署规则（agent 在本仓库内自动加载）
+README.md
 ```
 
 ## 13. 场景清单

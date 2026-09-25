@@ -174,7 +174,7 @@ onboarding，不在生产 Compose 或 `.env.example` 中配置 `qq_official`。
    循环删除卷或并行运行同一 QQ 的其他客户端。
 
 本节描述部署契约，不代表已经登录 QQ、完成新设备验证或观察到 OneBot 连接；这些
-必须按 `docs/runbook.md` §7–§8 在目标环境中完成。
+必须按 `docs/runbook.md` §3–§4 在目标环境中完成。
 
 ## 4. 运维：账号、掉线检测、重登与风险控制
 

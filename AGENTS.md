@@ -48,7 +48,7 @@
 ## 5. 工具与仓库习惯
 
 - 文件读写用 `read` / `edit` / `write` / `grep` / `glob`，不用 shell 的 cat/sed/grep/find 替代；shell 只跑真实二进制（docker、ssh、git、tofu）。
-- 服务器：`ssh -i ~/.ssh/dev-dai -o IdentitiesOnly=yes root@160.191.41.242`（nekoringo2）；compose 统一 `docker compose -f /srv/alicedev/deploy/docker-compose.yml --env-file /srv/alicedev/deploy/.env …`。宿主文件的归属与上线方式见 `docs/runbook.md`：`deploy/` 由 IaC 落地，`bot/` 与 `templates/` 只经 `deployctl` / `deployrun` 切检出交付，不手工拷贝。
+- 服务器：`ssh -i ~/.ssh/dev-dai -o IdentitiesOnly=yes root@160.191.41.242`（nekoringo2）；compose 统一 `docker compose -f /srv/alicedev/deploy/docker-compose.yml --env-file /srv/alicedev/deploy/.env …`。部署一律按 `.omp/rules/deploy.md`：`deploy/` 由 IaC 落地，`bot/` 与 `templates/` 只经 `deployctl` / `deployrun` 切检出交付，不手工拷贝；部署以外的宿主操作见 `docs/runbook.md`。
 - DuckDB 单写者是 astrbot 进程；不要从别的进程打开 `alicedev.duckdb`。
 - 凭据从 IaC/SOPS/`deploy/.env` 取，不粘进对话、不进 argv、不进 state。
 - git：日常用 RiriAgent 账号；功能走 feature 分支，真 e2e 验收后再合 main；不拿 `git status/diff` 当验证。
