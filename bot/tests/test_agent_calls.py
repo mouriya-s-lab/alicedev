@@ -48,11 +48,8 @@ def test_agent_commands_expose_exact_state_permissions_and_usage(tmp_path: Path)
             assert result.body["audience"] == "all"
             commands = result.body["commands"]
             assert [command["path"] for command in commands] == list(state.agent_commands)
-            assert [(command["path"], command["usage"]) for command in commands] == [
-                ("需求", "/需求 <内容>"),
-                ("需求列表", "/需求列表 [页]"),
-                ("收藏", "/收藏 （引用消息）"),
-                ("收藏夹", "/收藏夹 [页]"),
+            assert [command["usage"] for command in commands] == [
+                env.registry.command_at(path).usage for path in state.agent_commands
             ]
             assert await env.texts() == []
         finally:

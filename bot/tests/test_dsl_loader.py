@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -79,12 +80,10 @@ def test_bad_command_rejected_others_survive(tpl: Path, patch: tuple[str, str], 
     baseline_commands = {command.name for command in load_registry(tpl).command_list()}
     scenario_path = tpl / "scenarios/requirement/scenario.yaml"
     scenario_text = scenario_path.read_text(encoding="utf-8")
-    agent_commands = "agent_commands: [需求, 需求列表, 收藏, 收藏夹]"
-    assert agent_commands in scenario_text
     scenario_path.write_text(
-        scenario_text.replace(agent_commands, "agent_commands: [需求, 需求列表, 收藏, 收藏夹, ping]"),
-        encoding="utf-8",
+        re.sub(r"(agent_commands: \[)", r"\1ping, ", scenario_text, count=1), encoding="utf-8"
     )
+    assert "agent_commands: [ping, " in scenario_path.read_text(encoding="utf-8")
     write(tpl, "commands/ping.yaml", GOOD_PING.replace(old, new))
     reg = load_registry(tpl)
     errs = [e for e in reg.errors if e.path == "commands/ping.yaml"]

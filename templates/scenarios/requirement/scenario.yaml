@@ -14,4 +14,4 @@ states:
       image_templates: [requirement_summary, generic_card]
       stickers: []
       max_text_chars: 600
-    agent_commands: [需求, 需求列表, 收藏, 收藏夹]
+    agent_commands: [需求, 需求列表, 收藏, 收藏夹, 会话]

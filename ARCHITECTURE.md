@@ -499,7 +499,7 @@ AI 指令：
 
 `share` 动作：每个被 @ 的用户一个 token（`user_key` 记入 `tokens_issued`），无 @ 给发起人；逐条 `[At, Plain(url)]`。`favorite` 动作：原作者、文本、图片落盘 `data/plugin_data/alicedev/images/`、收藏人；agent 收藏时收藏人是会话创建者，原作者是被引用消息的群友或会话（「%n 名称」）。`list` 每页 10 条，页脚 `第 x/y 页 · /<指令> n`。
 
-**agent 可以调用的指令**（各场景状态的 `agent_commands`）：`requirement`、`investigate`、`github-issue`、`github-pr` 的对话态可用 `需求`、`需求列表`、`收藏`、`收藏夹`；`steward` 见 §13.3。`upgrade-bot` 不开放。
+**agent 可以调用的指令**（各场景状态的 `agent_commands`）：`requirement`、`investigate`、`github-issue`、`github-pr` 的对话态可用 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`（收藏要的消息 id 只能从 `/会话 %n` 的 `recent` 取）；`steward` 见 §13.3。`upgrade-bot` 不开放。
 
 ## 10. DuckDB schema（`bot/alicedev/store/schema.sql`，`schema_version` 表）
 
@@ -578,7 +578,7 @@ README.md
 
 ### 13.1 单对话态场景
 
-一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲 12h 只关闭 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。`discussing` 的 `agent_commands` 为 `需求`、`需求列表`、`收藏`、`收藏夹`：AI 在对话中发现值得单独跟进的需求可以开需求会话（先用 `需求列表` 查重），发现值得留存的消息可以收藏。
+一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲 12h 只关闭 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。`discussing` 的 `agent_commands` 为 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`：AI 在对话中发现值得单独跟进的需求可以开需求会话（先用 `需求列表` 查重），发现值得留存的消息可以收藏（先用 `/会话 %n` 取消息 id）。
 
 | 场景 | 启动它的指令 | 名称 | reply 规格 | prompt 要点 |
 |---|---|---|---|---|
