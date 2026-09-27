@@ -1,9 +1,0 @@
-Command (run from /Users/mouriya/Ext/code/alicedev-wt/links-github):
-PYTHONPATH=bot uv run --with aiohttp --with jinja2 --with python-frontmatter --python 3.11 python /tmp/alicedev-command-smoke.py
-
-Observed output:
-registered ['解读', '归档', 'alicedev', '链接']
-target /h/server%2Fmain/workspace/workspace%201?open=agent%3Aagent%2F1&embed=1
-audit rows 1
-
-The throwaway script explicitly registered interpret, archive, help, and links modules, invoked /链接 with one mention and a fake gateway, asserted the architecture target format, recipient user_key, one audit INSERT, and one URL message. The script was removed after the run.

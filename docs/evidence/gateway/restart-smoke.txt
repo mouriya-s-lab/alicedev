@@ -1,9 +1,0 @@
-Gateway restart semantics evidence (local runtime)
-===================================================
-
-Observed after restarting the gateway process with the same configuration:
-  cookie_after_restart_health 200
-  cookie_after_restart_status 200 True
-  unused_token_after_restart 403
-
-This demonstrates that the signed share cookie remains valid across restart while an unconsumed in-memory one-time token does not.

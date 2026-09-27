@@ -1,6 +1,0 @@
-Session JSONL: /home/paseo/.omp/agent/sessions/--workspace-alicedev--/2026-09-19T04-33-41-336Z_01a0b7f1-05d8-7447-a841-853b368eb220.jsonl
-
-{"type":"custom","customType":"alicedev.pending","data":{"session":"s_6qwymgt26a","msg":"m_klobqvupiv"},"id":"cea47051","parentId":"df83f6a6","timestamp":"2026-09-19T04:33:41.781Z"}
-{"type":"custom","customType":"alicedev.consumed","data":{"msgs":["m_klobqvupiv"],"reply_id":"fc06faea-38a3-47d8-9dbc-1b41a3e15238"},"id":"53658e18","parentId":"61bb4d81","timestamp":"2026-09-19T04:33:57.455Z"}
-{"type":"custom","customType":"alicedev.pending","data":{"session":"s_6qwymgt26a","msg":"m_s4gjprm6uh"},"id":"3cbda714","parentId":"77503ef3","timestamp":"2026-09-19T04:38:57.403Z"}
-{"type":"custom","customType":"alicedev.consumed","data":{"msgs":["m_s4gjprm6uh"],"reply_id":"bbfbff9f-3f73-4482-af91-a6c2be27e10e"},"id":"34bcaa83","parentId":"26f71301","timestamp":"2026-09-19T04:39:09.655Z"}

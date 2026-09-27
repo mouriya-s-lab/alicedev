@@ -86,7 +86,7 @@ make -C /srv/alicedev/app fixed-main
 
 按改动类型追加：
 
-- 改了行为（指令、场景、回话）：在 TG 上真实触发改动涉及的每条路径，并把证据放进 `docs/evidence/`。
+- 改了行为（指令、场景、回话）：在 TG 上真实触发改动涉及的每条路径，证据写进对应 PR 的正文（图片经 image-share）。
 - `gateway/` 或 paseo 上游：用 agent-browser 在新浏览器里打开一次性链接，走完兑换 → 会话页 → 进入会话。paseo 升级后还要核对 `gateway/static/paseo-view.css` 的选择器，以及 `gateway/static/paseo-boot.js` 依赖的存储键名和路由。验收标准是首次打开、刷新、前进、后退都停在工作区，且时间线能加载。
 
 ## 6. 凭据与 IaC

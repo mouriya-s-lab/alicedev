@@ -24,7 +24,7 @@ flowchart LR
 | `docs/runbook.md` | 部署以外的宿主操作：TG / QQ 登录、dashboard、已知限制 |
 | `tools/README.md` | shim 与运维 CLI（`paseoctl`、`deployctl`、`deployrun`、`mainsync`、`e2e_driver.py`、`tgctl`） |
 | `gateway/README.md` | 网关配置与行为 |
-| `docs/research/` `docs/evidence/` | 外部系统实测事实；真实 e2e 与上线证据 |
+| PR 正文 | 每次改动的验收证据（仓库里不存证据文件） |
 
 ## 目录
 
