@@ -32,7 +32,7 @@
 ## 3. 验证规则
 
 - **没有真实 e2e = 没做。** fake runner、stub、mock、单测、py_compile 只能辅助，不能当验收。
-- `/升级bot` 的验收路径：真 daemon + 真 e2e/tg-cli 容器 + 真 AI 会话 + 真 QQ/TG 投递；场景的每个可见状态各真触发一次；证据（截图 / 日志 / 行）入 `docs/evidence/`。
+- `/升级bot` 的验收路径：真 daemon + 真 e2e/tg-cli 容器 + 真 AI 会话 + 真 QQ/TG 投递；场景的每个可见状态各真触发一次。证据（截图 / 日志 / 行）写进 PR body，图片经 image-share 上传后嵌入；不往仓库里放证据文件。
 - 隔离验证可以先于生产验证，但**隔离必须是同一架构**（bot 调度 → paseoctl shim → paseo CLI → daemon；agent 回复 → `/v1/reply` → 出站队列），在错架构上跑通的东西不算。
 - 动生产（nekoringo2 `deploy` 项目、宿主 bot 检出、paseo 工作区、QQ 登录态）必须有明确闸门：先说清做什么、影响谁、如何回滚，再做。零改动的只读核查不需要闸门。
 

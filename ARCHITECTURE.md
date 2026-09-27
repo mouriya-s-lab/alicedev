@@ -1,6 +1,6 @@
 # alicedev 架构与契约
 
-> 契约变更先改本文件，再写代码。事实依据见 `docs/research/*.md`；线上状态与待办见 `HANDOFF.md`。
+> 契约变更先改本文件，再写代码。外部系统（paseo、omp、AstrBot）的实测事实写在依赖它的段落里（§4、§5、§6）；线上状态与待办见 `HANDOFF.md`。
 
 ## 0. 一句话
 
@@ -320,6 +320,12 @@ omp 在 rpc/rpc-ui 下**不触发** `input` 事件（`oh-my-pi/.../types.ts:908`
 4. `session_start`：扫 `getBranch()` 重建 pending/consumed/reminded。
 5. 加载方式：paseo custom provider `omp-alicedev`：`{extends:"omp", command:["omp","-e","/opt/alicedev/omp-extension"]}`（replace 模式，argv[0] 必须是 omp；`provider-registry.ts:833-862`，`omp/runtime.ts:83-88`）。omp 同时发现扩展目录下的 `skills/<name>/SKILL.md`，skill `alicedev` 由此装载（§6.1）。
 
+omp 扩展 API 的事实（`@oh-my-pi/pi-coding-agent` 18.1.17，`harness/package.json` 锁定的版本），决定了上面的做法：
+- `input` 事件没有消息 id 字段，且 rpc 下不触发，所以消息 id 只能靠 `/chat_ingress` 命令带进来。
+- `session_start` 事件不带会话 id，要从 `ctx.sessionManager` 取（`getSessionId()`、`getBranch()`）；`session_stop` 自带 `session_id` 与 abort signal，返回 `{continue: true, additionalContext}` 会再跑一轮，omp 把这种续跑链上限定为 8 次。
+- 没有 `session_end` / `before_yield` 事件；`turn_end` 只是通知，返回值被忽略；进程级清理用 `session_shutdown`。
+- `pi.exec` 的结果字段是 `code`，不是 `exitCode`。
+
 ## 6. 消息：入队 API 与出队（`http://astrbot:6200`，头 `X-Alicedev-Token`）
 
 ```ts
@@ -359,6 +365,11 @@ GET  /v1/health → 200 { generation, revision }   // 免鉴权；alicedev CLI �
 - **`file` 发布（入队时完成）**：`os.path.realpath(path)` 以 `REPORTS_ROOT/` 为前缀、`lstat` 为常规文件、路径各段无符号链接；生成 `report_id`；原子复制到 `REPORTS_ROOT/_published/<report_id>/<basename>`（临时文件 + rename）；写 `reports`；`.md` 的消息内容为 `https://<host>/_alicedev/r/<report_id>/<basename>`，其他扩展名以文件组件发送。`image` 的路径做同样校验。
 
 **出队**：outbox worker 按 `chat_key` 先进先出取 `queued` 行 → 渲染（长文本转卡片、`image_template` 经 t2i；AI 的消息带会话标记 `%n 名称`，文字消息为前缀、卡片为角标，让群友知道是哪个会话、回复时该指哪个）→ 平台适配器发送 → 平台返回消息 id 时写 `outbound(platform_message_id → session_id)` → 标记 `sent`；发送失败标记 `failed` 并按退避重试。bot 重启或插件重载后继续消费未出队的行。出队至少一次：发送成功后、写 `sent` 前崩溃会重发。程序指令与调度自己的回话也以同样的行入队。
+
+出队依赖的 AstrBot 行为（按 AstrBot 源码 `f99c76e` 核读；生产镜像按 digest 固定，版本号未单独核对）：
+- **卡片渲染只能走 t2i 服务**：`html_render` 固定走网络策略，`t2i_strategy: local` 只是 Pillow 的 Markdown 渲染，不渲染 HTML。所以 `cmd_config.json` 用 `remote` + `t2i_endpoint=http://t2i:8999`（§11），t2i 容器必须在。卡片的 CSS 和图片要内联或用 data URI，t2i 容器看不到插件目录里的文件。
+- **Telegram 的 @ 是文字**：发送时 `At` 只取 `name` 拼成 `@<name>`，不按数字 id 生成 mention 实体；`share` 给没有公开用户名的人发链接时，@ 只是一段文字。
+- **入站组件**：Telegram 把 `reply_to_message` 转成 `Reply`、把 mention 实体转成 `At(username)` 并去掉对 bot 的 @；OneBot（aiocqhttp）用 `get_msg` 取回被引用消息组成 `Reply`，并解析 `at` 的用户信息。`bot/alicedev/actions/inbound.py` 按这些组件取引用、@ 与图片。
 
 **插件生命周期**：`initialize()`：加载并校验 DSL → 打开 Store（一次）→ 启动 aiohttp `TCPSite`（`reuse_port`）→ 启动 sweeper、outbox worker、调度（从 DuckDB 恢复未结束会话）；`generation` 自增。`terminate()`：标记 draining（`/v1/*` 返回 503）→ 等待在途请求 ≤10s → 取消并等待后台任务 → 关站 → 关 Store。插件热重载 = `terminate()` + 新代码 `initialize()`；AstrBot 重载只清 `data.plugins.alicedev*` 的模块缓存，插件入口在导入前自行清掉插件自带的 `alicedev` 包，否则重载后仍跑旧代码。`alicedev` CLI 遇 503/连接拒绝按 1,2,4,8s 退避重试，`reply` 与 `commands` 的总预算 30s，`run` 120s（`start` 同步派发，§7）。
 
@@ -569,7 +580,7 @@ templates/cards/ templates/stickers/
 harness/core/ harness/omp-extension/ harness/cli/ harness/skills/alicedev/
 gateway/
 deploy/                   docker-compose.yml, dev/, e2e/, tg-cli/, astrbot/, paseo/
-docs/research/ docs/runbook.md docs/evidence/
+docs/runbook.md           部署以外的宿主操作
 .omp/rules/deploy.md      部署规则（agent 在本仓库内自动加载）
 README.md
 ```

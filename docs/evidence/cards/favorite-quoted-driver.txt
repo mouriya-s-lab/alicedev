@@ -1,6 +1,0 @@
-WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
-sent ['已收藏 #51']
-records 1
-text 这是引用路径与图片落盘验证。
-image_exists True
-image_path /AstrBot/data/plugin_data/alicedev/images/1e53db67f84f473891a9d4e6ec0a3821.png
