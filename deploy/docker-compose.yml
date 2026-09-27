@@ -183,6 +183,12 @@ services:
     image: motricseven7/snowluma:latest@sha256:28efabd86a432b7b12ccb87bed098705cf05c22cea50dcbf1930bdf288c9d0f0
     platform: linux/amd64
     container_name: alicedev-snowluma
+    # QQ reports the system hostname as the login device name and sees the NIC
+    # MACs. Docker's defaults (container-id hostname, random MAC per recreate)
+    # look like no real machine and change on every recreate, which QQ treats as
+    # a new device. Pin a Windows-style name and Realtek-OUI MACs; changing any of
+    # these after login triggers QQ new-device verification.
+    hostname: DESKTOP-WV4QWGJ
     restart: unless-stopped
     # QQ's bundled Chromium needs a large /dev/shm; the native hook injects into
     # the QQ process via ptrace, which the default seccomp profile blocks.
@@ -218,7 +224,11 @@ services:
       - qq-client-config:/app/.config
       - qq-client-data:/app/.local/share
     # internal carries the reverse WS to astrbot; edge is QQ's outbound to Tencent.
-    networks: [internal, edge]
+    networks:
+      internal:
+        mac_address: "00:E0:4C:A8:98:B8"
+      edge:
+        mac_address: "00:E0:4C:51:6B:27"
     depends_on:
       astrbot:
         condition: service_healthy
