@@ -23,7 +23,7 @@
 - **agent 调用指令与管家**：已上线（ARCHITECTURE §6.1、§13.3），生产验收见 `docs/evidence/agent-commands/README.md`。非管理员被拒这一条没有真实平台身份可测，只有单测覆盖。
 - **fixed-main** `/workspace/alicedev`：干净，停在 `80161d5`；下一个 `/升级bot` 派发时由 `mainsync` 快进。
 - **Telegram**：`alicedev-tg-cli` 用自己的授权（本机会话批准的 QR 登录，账号 865341181）；验收私聊 `RIRI OuO` ↔ `@ririOuObot`。
-- **QQ**：snowluma 在跑，**QQ 账号尚未扫码登录**（人工步骤，见 runbook §3）。
+- **QQ**：snowluma 在跑，**QQ 账号尚未扫码登录**（人工步骤，见 runbook §3）。设备身份已固定（ARCHITECTURE §11）：hostname `DESKTOP-WV4QWGJ`、MAC `00:E0:4C:A8:98:B8`（internal）/ `00:E0:4C:51:6B:27`（edge）、`machine-id` 在数据卷；登录后不要再改这几项。
 - **2026-09-25 宿主故障已处理**：一个 9-20 起的孤儿 `tcpdump -w /tmp/nbx-final-direct-cycle1.pcap`（netbird 调试遗留，文件已删、句柄未关）写满 3.9G 的 `/tmp` tmpfs，runc 无法 `docker exec`，从 9-25 01:07 起全部容器 unhealthy、`paseoctl` 失效。停掉该进程后恢复；TG 上程序指令、AI 指令新开会话与补充、`/链接` 浏览器进入工作区、`/归档` 都已真实跑通（`docs/evidence/deploy-nekoringo2/70-post-outage-tg-acceptance.md`）。预防写进 `.omp/rules/deploy.md` §1、§3。
 - **AstrBot dashboard**：记录在案的密码都返回 401，当前密码未知。`deployctl` 热重载用的是插件权限 API key（`ASTRBOT_API_KEY`，已进 SOPS，宿主副本 `/root/alicedev-astrbot-api-key`），不依赖 dashboard 密码。
 - **回滚物**：`/srv/alicedev/backups/pre-steward-20260925T193925Z/`（agent 指令上线前的 DuckDB 与 WAL）；`/srv/alicedev/backups/pre-v3-<ts>/`（v3 前的 DuckDB、`paseo_home`、旧 `bot/` `deploy/` `templates/`、镜像 ID）；镜像标签 `alicedev/{paseo,astrbot}:rollback-pre-steward`、`alicedev/{paseo,gateway}:rollback-pre-v3`、`alicedev/{paseo,astrbot,gateway}:rollback-pre-a49ad63`、`alicedev/paseo:rollback-pre-f7ef76f`、`alicedev/gateway:rollback-pre-boot`、`alicedev/gateway:rollback-pre-alice`（Alice 主题之前的网关）。
