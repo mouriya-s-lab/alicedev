@@ -14,9 +14,11 @@
 name: alicedev-e2e
 
 services:
-  # Re-apply the seed config on every `up` (like production's astrbot-init):
-  # the data volume outlives the image, and AstrBot rewrites cmd_config.json at
-  # runtime, so baking the seed into the image would only reach a fresh volume.
+  # Re-apply the seed config on every `up` (unlike production's astrbot-init,
+  # which only seeds absent files): this is the disposable test rig and each run
+  # must start from the same config. The data volume outlives the image, and
+  # AstrBot rewrites cmd_config.json at runtime, so baking the seed into the
+  # image would only reach a fresh volume.
   init:
     image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
     platform: linux/amd64

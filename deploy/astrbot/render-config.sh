@@ -52,9 +52,6 @@ try:
     payload = json.loads(rendered)
 except json.JSONDecodeError as exc:
     raise SystemExit(f"invalid rendered JSON in {source}: {exc}") from exc
-if isinstance(payload, dict) and isinstance(payload.get("admin_users"), str):
-    raw_admins = payload["admin_users"]
-    payload["admin_users"] = [part for part in (s.strip() for s in raw_admins.split(",")) if part]
 tmp = destination.with_name(destination.name + ".tmp")
 tmp.write_text(
     json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

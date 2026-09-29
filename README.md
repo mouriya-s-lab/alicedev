@@ -19,7 +19,6 @@ flowchart LR
 |---|---|
 | `AGENTS.md` | 在本仓库工作的规则（先读） |
 | `ARCHITECTURE.md` | 契约：容器拓扑、DSL、控制面、回复与 transition、调度状态机、网关、schema、部署契约 |
-| `HANDOFF.md` | 线上现状、待决事项、已知缺口 |
 | `.omp/rules/deploy.md` | 部署规则：闸门、体检、按改动类型上线、核验、凭据、回滚 |
 | `docs/runbook.md` | 部署以外的宿主操作：TG / QQ 登录、dashboard、已知限制 |
 | `tools/README.md` | shim 与运维 CLI（`paseoctl`、`deployctl`、`deployrun`、`mainsync`、`e2e_driver.py`、`tgctl`） |

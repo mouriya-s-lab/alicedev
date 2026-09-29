@@ -1,6 +1,6 @@
 # AGENTS.md — alicedev 开发阶段规则
 
-适用于在本仓库工作的每个 agent（主 session 与子代理）。顺序：先读本文件，再 `ARCHITECTURE.md`（契约），再 `HANDOFF.md`（状态与待办）。
+适用于在本仓库工作的每个 agent（主 session 与子代理）。顺序：先读本文件，再 `ARCHITECTURE.md`（契约）。线上现状以线上为准（`deployctl status --app /deploy/app`、`docker ps`），待办与待决事项在 GitHub issue，仓库里不留交接文档。
 
 ## 1. 先对齐，再动手
 
@@ -25,7 +25,7 @@
 5. **无 MCP、无 WS**：bot → daemon 只走 paseo CLI shim。paseo 里的 agent 不用 MCP（pi 默认无 MCP）：CLI + skill + pi-unified-exec（`docker exec -it` / ssh）。跨容器调用走 `tools/` 下的 shim（`tgctl` / `paseoctl` / `deployctl`）。e2e、tg-cli 怎么用是场景状态 prompt 的事。
 6. **容器拓扑固定**（ARCHITECTURE §1）：`deploy` 项目常驻 `caddy` `gateway` `astrbot` `snowluma` `paseo` `t2i`；`e2e`、`tg-cli` 是独立常驻的 compose 项目，永不随 `deploy` 下线；`e2e` 内不跑 pi、不是第二个 daemon。
 7. **AI 工作目录**：无 `repo` 的场景，agent 在场景 `cwd`（如 `/workspace/openalice`）里；有 `repo` 的场景，agent 只在该会话从挂钩仓库 fixed-main 派生的 worktree 里。fixed-main（如 `/workspace/alicedev`）永不开 AI、永不写。
-8. **部署只碰 astrbot 插件**：宿主 alicedev 检出切到 main 上的目标 SHA（交付 `bot/` 与 `templates/`）+ AstrBot 插件热重载；`requirements.txt` 或平台配置变化才 `restart astrbot`；paseo 不动。
+8. **部署只碰 astrbot 插件**：宿主 alicedev 检出切到 main 上的目标 SHA（交付 `bot/` 与 `templates/`）+ AstrBot 插件热重载；`requirements.txt` 变化才 `restart astrbot`；paseo 不动。AstrBot 自己的配置（管理员名单、平台、插件配置）归 AstrBot，部署与 IaC 不覆盖（ARCHITECTURE §11）。
 9. **模型是部署配置**：paseo daemon 的 provider 配置文件决定；bot 只传 provider id。代码里不写死模型；换模型改一行配置。`/升级bot` 会话用 task:low 同款 `muse-spark-1.3-contributor`。**未经用户允许禁止用其他付费模型跑任何测试。**
 10. **指令全部 DSL 化**：指令、消息路由、场景、用户可见的固定文字只写在 `templates/` 的 YAML DSL 里（ARCHITECTURE §3）；代码只实现封闭的动作、参数类型与卡片渲染。**禁止**在代码里写死指令、回话或场景；新增指令先看现有动作能否组合，确需新动作才加代码并同步 §3.2 的动作表。改完 DSL 必须跑 `python -m alicedev.dsl check` 并看 `dsl card` 出的图。
 
@@ -53,3 +53,4 @@
 - 凭据从 IaC/SOPS/`deploy/.env` 取，不粘进对话、不进 argv、不进 state。
 - git：日常用 RiriAgent 账号；功能走 feature 分支，真 e2e 验收后再合 main；不拿 `git status/diff` 当验证。
 - 图一律 mermaid。中文与用户沟通，术语保留英文。
+- 面板密码类凭据在非公网服务上泄漏不重要：不做说教、不强制轮换。
