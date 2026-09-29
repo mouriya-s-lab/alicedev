@@ -1,5 +1,5 @@
 {
-  "admin_users": "${ALICEDEV_ADMIN_USERS}",
+  "admin_users": [],
   "paseo_container": "alicedev-paseo",
   "internal_token": "${ALICEDEV_INTERNAL_TOKEN}",
   "internal_api_host": "0.0.0.0",

@@ -35,7 +35,8 @@ services:
 
   # AstrBot rewrites cmd_config.json atomically (temp file + rename), which a
   # read-only single-file bind mount cannot survive (EBUSY). Seed the rendered
-  # configs into the data volume instead; every `up` re-applies the render.
+  # configs into the data volume only when absent: once seeded they belong to
+  # AstrBot and `up` never overwrites them (ARCHITECTURE §11).
   astrbot-init:
     image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
     platform: linux/amd64
@@ -45,7 +46,7 @@ services:
       # The rendered cmd_config carries this token; require it before any
       # `up` so a missing token cannot silently disable reverse WS auth.
       ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?set ONEBOT_ACCESS_TOKEN}
-    command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/cmd_config.json /data/cmd_config.json && cp /seed/alicedev_config.json /data/config/alicedev_config.json"]
+    command: ["sh", "-ec", "mkdir -p /data/config && { [ -e /data/cmd_config.json ] || cp /seed/cmd_config.json /data/cmd_config.json; } && { [ -e /data/config/alicedev_config.json ] || cp /seed/alicedev_config.json /data/config/alicedev_config.json; }"]
     volumes:
       - astrbot_data:/data
       - ./astrbot/cmd_config.rendered.json:/seed/cmd_config.json:ro
@@ -156,10 +157,11 @@ services:
       start_period: 45s
 
   # Seed SnowLuma's OneBot reverse-WS client config into its data volume before
-  # it starts. onebot.json is global adapter config (NOT login state); it is
-  # re-applied every `up` and lives safely beside the persisted device identity
-  # in the same volume. chown to the in-container snowluma uid so SnowLuma can
-  # normalize/rewrite it on load.
+  # it starts, only when absent. onebot.json is global adapter config (NOT login
+  # state) and SnowLuma rewrites it on load, so once seeded it belongs to
+  # SnowLuma and `up` never overwrites it (ARCHITECTURE §11); it lives beside the
+  # persisted device identity in the same volume. chown to the in-container
+  # snowluma uid so SnowLuma can normalize/rewrite it on load.
   snowluma-init:
     image: caddy:2-alpine@sha256:040e9f7480b80b6d4a7e5013a21159b950a63dcbdb956e38abe2387fb28d9ec0
     platform: linux/amd64
@@ -171,7 +173,7 @@ services:
       ONEBOT_ACCESS_TOKEN: ${ONEBOT_ACCESS_TOKEN:?set ONEBOT_ACCESS_TOKEN}
       SNOWLUMA_UID: ${SNOWLUMA_UID:-1000}
       SNOWLUMA_GID: ${SNOWLUMA_GID:-1000}
-    command: ["sh", "-ec", "mkdir -p /data/config && cp /seed/onebot.json /data/config/onebot.json && chown -R \"$${SNOWLUMA_UID}:$${SNOWLUMA_GID}\" /data/config"]
+    command: ["sh", "-ec", "mkdir -p /data/config && { [ -e /data/config/onebot.json ] || cp /seed/onebot.json /data/config/onebot.json; } && chown -R \"$${SNOWLUMA_UID}:$${SNOWLUMA_GID}\" /data/config"]
     volumes:
       - qq-gateway-data:/data
       - ./astrbot/snowluma_onebot.rendered.json:/seed/onebot.json:ro

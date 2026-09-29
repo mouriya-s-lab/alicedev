@@ -1,6 +1,6 @@
 # alicedev 架构与契约
 
-> 契约变更先改本文件，再写代码。外部系统（paseo、omp、AstrBot）的实测事实写在依赖它的段落里（§4、§5、§6）；线上状态与待办见 `HANDOFF.md`。
+> 契约变更先改本文件，再写代码。外部系统（paseo、omp、AstrBot）的实测事实写在依赖它的段落里（§4、§5、§6）；线上状态以线上为准（`deployctl status`、`docker ps`），待办与待决事项在 GitHub issue。
 
 ## 0. 一句话
 
@@ -475,6 +475,8 @@ alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <i
 
 配置（`bot/_conf_schema.json`）：`allowed_chats: string[]`（chat_key 白名单；空 = 全部允许）、`admin_users: string[]`（user_key）、`internal_token`、`gateway_url`、`public_base_url`、`reports_root`、`github_token?`、`default_repo: TraderAlice/OpenAlice`。
 
+这些配置由 AstrBot 持有（§11「AstrBot 配置」）：`admin_users` 只在 AstrBot 里改（dashboard 的插件配置页，或改数据卷里的 `config/alicedev_config.json` 后重载插件），不来自部署环境变量，`deploy/.env` 里没有它。
+
 分发：单个 `@filter.event_message_type(ALL)` 入口；以 `/` 或 `／` 开头的按指令 DSL 解析，其余按 `routes.yaml`。中间件顺序：白名单 → 解析（指令名/别名 → 子指令词 → 紧跟的 `%n`（`%`/`％` 同义）→ 按 `usage` 取其余参数、按类型解析）→ 权限 → 动作 → 按结果键回话。权限不足时私下不回（避免刷屏），日志记录。`owner` 权限 = 该会话创建者或管理员。agent 经 `/v1/commands` 调用指令时走同一套解析、权限与动作，权限按会话创建者判断（§6.1）。
 
 **内置指令**（每条都是 `templates/commands/` 下一个文件；动作列只写关键参数）
@@ -545,14 +547,15 @@ tokens_issued(token_id PK, session_id, user_key, issued_by, target, issued_at, e
 ## 11. 部署（`deploy/`）
 
 - `docker-compose.yml`（项目 `deploy`）：`caddy`、`gateway`、`astrbot`、`snowluma`、`t2i`、`paseo` + 一次性 `astrbot-init`、`snowluma-init`、`reports-init`；`.env.example`：`ALICEDEV_HOST`、`TELEGRAM_BOT_TOKEN`、`PASEO_PASSWORD`、`ALICEDEV_INTERNAL_TOKEN`、`GATEWAY_SECRET`、`ASTRBOT_DASHBOARD_INITIAL_PASSWORD`、`ONEBOT_ACCESS_TOKEN`（aiocqhttp 反向 WS 与 snowluma 共用）、`PANEL_BIND_IP`（管理面板绑定的 netbird 接口 IP）、`OPENCODE_API_KEY`、`VNC_PASSWD?`、`GITHUB_TOKEN?`。
+- **服务配置归服务（seed-only）**：AstrBot 的 `cmd_config.json`（平台、t2i、dashboard）与 `config/alicedev_config.json`（插件配置，含 `admin_users`），以及 SnowLuma 的 `config/onebot.json`，都是服务自己会改写的有状态配置，源头是数据卷里的这些文件。`astrbot-init`、`snowluma-init` 只播种：文件不存在时才从渲染文件复制，已存在就原样保留；`up`、重建、IaC apply 都不覆盖。播种之后部署与 IaC 不再触碰它们：管理员名单、平台与插件配置的改动直接在 AstrBot 里做。渲染文件只是首次播种的种子，`admin_users` 种子为空列表，新卷起来后要在运行时设置第一位管理员（runbook §4）。**多服务共享的凭据**（`ALICEDEV_INTERNAL_TOKEN` 同时在 AstrBot 插件配置与 gateway、paseo 的环境里；`GITHUB_TOKEN` 同时在插件配置与 paseo 的环境里；`ONEBOT_ACCESS_TOKEN` 同时在 AstrBot 的 `cmd_config.json` 与 SnowLuma 的 `onebot.json` 里）改动时，每个消费者各改一处、各自生效，清单见 `.omp/rules/deploy.md` §6。
 - 卷：`astrbot_data`；snowluma 的 `qq-gateway-data`/`qq-client-config`/`qq-client-data`（持久设备身份，重启不掉线）；`paseo_home`（daemon 与 harness 配置，用户自管）；`workspace`（各场景的 `cwd`、fixed-main 与会话 worktree）；`reports`（paseo 与 astrbot 同路径挂载 `/srv/alicedev/reports` rw；gateway 挂 `_published` ro）。
-- snowluma：镜像 `motricseven7/snowluma`；反向 WS 由 `deploy/astrbot/snowluma_onebot.json` seed 为 `wsClients.url=ws://astrbot:6199`（token `ONEBOT_ACCESS_TOKEN`）。面板（noVNC `6081` / WebUI `5099`）只绑 `${PANEL_BIND_IP}`，OneBot 端口不发布宿主机。首次 QQ 登录是运行时人工步骤（noVNC 扫码）。**设备身份固定**：QQ 把系统 hostname 当登录设备名、能看到网卡 MAC，Docker 默认的 hostname（容器 id 前 12 位）与每次重建随机的 MAC 既不像真实机器、又会在重建后变成「新设备」。compose 固定 `hostname: DESKTOP-WV4QWGJ`（Windows 默认命名形式）和两张网卡的 MAC（Realtek OUI `00:E0:4C`）；`machine-id` 由镜像入口持久化在 `qq-gateway-data`。登录后改动其中任何一项都会触发 QQ 新设备验证。
+- snowluma：镜像 `motricseven7/snowluma`；反向 WS 首次由 `deploy/astrbot/snowluma_onebot.json` seed 为 `wsClients.url=ws://astrbot:6199`（token `ONEBOT_ACCESS_TOKEN`），此后 `config/onebot.json` 归 SnowLuma（上一条）。面板（noVNC `6081` / WebUI `5099`）只绑 `${PANEL_BIND_IP}`，OneBot 端口不发布宿主机。首次 QQ 登录是运行时人工步骤（noVNC 扫码）。**设备身份固定**：QQ 把系统 hostname 当登录设备名、能看到网卡 MAC，Docker 默认的 hostname（容器 id 前 12 位）与每次重建随机的 MAC 既不像真实机器、又会在重建后变成「新设备」。compose 固定 `hostname: DESKTOP-WV4QWGJ`（Windows 默认命名形式）和两张网卡的 MAC（Realtek OUI `00:E0:4C`）；`machine-id` 由镜像入口持久化在 `qq-gateway-data`。登录后改动其中任何一项都会触发 QQ 新设备验证。
 - paseo 镜像：上游 paseo 原样，不 fork、不改源码；alicedev 只叠加运行层 `deploy/paseo/Dockerfile`：`harness/` 构建出的 `/opt/alicedev/omp-extension`（含 `skills/alicedev`）与 `alicedev` CLI（`/usr/local/bin/alicedev`）、声明 `omp` 与 `omp-alicedev` provider 的 daemon 配置、entrypoint，以及 agent 需要的 `omp`（bun）、`git`、`gh`、docker CLI、agent-browser + Chromium、带 bot 依赖与 pytest 的 Python 环境（供 `python -m alicedev.dsl` 与测试）。基础镜像由 `docker/base/Dockerfile` 以 `EXPO_PUBLIC_PASEO_SELFHOSTED=true` 构建（网关的自托管 manifest 依赖它）。
 - astrbot 镜像：固定 digest 的上游 AstrBot，加 docker CLI 与预装的 `bot/requirements.txt` 依赖（`deploy/astrbot/Dockerfile`）；astrbot 与 paseo 都挂 `/var/run/docker.sock`，paseo 用户属宿主 docker 组（`DOCKER_GID`）。
-- astrbot 挂载：插件目录 `/AstrBot/data/plugins/alicedev` ← 检出的 `bot/`；`/AstrBot/alicedev-templates` ← 检出的 `templates/`。`cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`）+ `t2i_endpoint=http://t2i:8999`。
-- **bot 与 DSL 交付**：宿主上一份由 `deployctl` 拥有的 alicedev git 检出，astrbot 挂载其中的 `bot/` 与 `templates/`。部署 = 检出切到 main 上的目标 SHA + AstrBot 插件热重载（`terminate()` + `initialize()`，不重启容器，平台连接不断）；`requirements.txt` 或平台配置变化时改为 `restart astrbot`。回滚 = 切回上一 SHA 再重载。paseo 不动。重载入口是 AstrBot dashboard 的 `POST /api/v1/plugins/alicedev/reload`（插件上次加载失败时为 `/api/v1/plugins/failed/alicedev/reload`），以带插件权限的 API key（`X-API-Key`，`.env` 的 `ASTRBOT_API_KEY`）认证。
+- astrbot 挂载：插件目录 `/AstrBot/data/plugins/alicedev` ← 检出的 `bot/`；`/AstrBot/alicedev-templates` ← 检出的 `templates/`。首次播种的 `cmd_config.json` 预置 `telegram` + `webchat` + `aiocqhttp`（reverse WS `0.0.0.0:6199`）+ `t2i_endpoint=http://t2i:8999`。
+- **bot 与 DSL 交付**：宿主上一份由 `deployctl` 拥有的 alicedev git 检出，astrbot 挂载其中的 `bot/` 与 `templates/`。部署 = 检出切到 main 上的目标 SHA + AstrBot 插件热重载（`terminate()` + `initialize()`，不重启容器，平台连接不断）；`requirements.txt` 变化时改为 `restart astrbot`（平台配置在 AstrBot 里改，不属于部署）。回滚 = 切回上一 SHA 再重载。paseo 不动。重载入口是 AstrBot dashboard 的 `POST /api/v1/plugins/alicedev/reload`（插件上次加载失败时为 `/api/v1/plugins/failed/alicedev/reload`），以带插件权限的 API key（`X-API-Key`，`.env` 的 `ASTRBOT_API_KEY`）认证。
 - **交付范围**：bot 部署交付 `bot/` 与 `templates/`（新增或修改指令、场景、卡片随之上线）。`deploy/` 由 IaC 落地，`harness/` 随 paseo 镜像构建，`gateway/` 随网关镜像构建；改动触及这些目录时不属 bot 部署，需协同。
-- `e2e`（`deploy/e2e/`）：独立 compose 项目，常驻；被测的 `bot/` 与 `templates/` 来自独立检出 `/srv/alicedev/e2e-src`，由 agent 经 `e2e_driver.py` 切到指定 SHA 后重启 e2e 的 AstrBot 与 t2i（同时清掉渲染缓存）；AstrBot 配置由 `init` 服务在每次 `up` 时从 `deploy/e2e/seed-data/` 重铺进数据卷；只在内部网络 `alicedev-e2e` 上（paseo 同在），不发布端口；不持有生产 QQ/TG/paseo 凭据。`tg-cli`（`deploy/tg-cli/`）：独立 compose 项目，`restart: always`，Telegram 会话在命名卷；首次登录一次性人工完成。
+- `e2e`（`deploy/e2e/`）：独立 compose 项目，常驻；被测的 `bot/` 与 `templates/` 来自独立检出 `/srv/alicedev/e2e-src`，由 agent 经 `e2e_driver.py` 切到指定 SHA 后重启 e2e 的 AstrBot 与 t2i（同时清掉渲染缓存）；AstrBot 配置由 `init` 服务在每次 `up` 时从 `deploy/e2e/seed-data/` 重铺进数据卷（测试场要求每次可复现，是上面 seed-only 的唯一例外）；只在内部网络 `alicedev-e2e` 上（paseo 同在），不发布端口；不持有生产 QQ/TG/paseo 凭据。`tg-cli`（`deploy/tg-cli/`）：独立 compose 项目，`restart: always`，Telegram 会话在命名卷；首次登录一次性人工完成。
 - DNS：`alicedev.237575.xyz` A 记录已手工建；runbook 记录迁入 `pve-vctcn/apps/dns` 的后续 issue。
 - **宿主文件 provision（不变量 4）**：`nekoringo-iac/apps/alicedev`（OpenTofu，state 本地，`github.com/mouriya-s-lab/nekoringo-iac`）把 `deploy/`（compose、Caddyfile、astrbot 模板 + 渲染产物）与由 SOPS 流式注入的 `deploy/.env` 从一个 committed alicedev revision `git archive` 原子安装到 `/srv/alicedev`（明文不进 state/argv/log）。`bot/`、`templates/` 不在托管集，否则 apply 会回滚已部署的版本。运行时 bring-up（`make up` / `make build && make up` / `deployctl`）是分离的 owner。模块用法见 `nekoringo-iac/apps/alicedev/README.md`。
 

@@ -50,7 +50,7 @@ docker exec -u paseo alicedev-paseo /deploy/app/tools/deployctl status --app /de
 |---|---|
 | `bot/`、`templates/` | 正常路径是 `/升级bot`（批准即 merge，`deploying` 状态自动部署）。手工：`docker exec -u paseo alicedev-paseo /deploy/app/tools/deployrun --app /deploy/app --commit <main 完整 SHA>`；核验失败自动切回并重载 |
 | `bot/requirements.txt` | `deployrun` 自动改为 `docker restart alicedev-astrbot`；长期依赖同时进 `deploy/astrbot/Dockerfile` 预装，再按下面 Dockerfile 那一行重建 |
-| `deploy/`（compose、astrbot 配置） | 提交 → IaC apply（§6）→ `make -C /srv/alicedev/app up` |
+| `deploy/`（compose、astrbot 种子配置） | 提交 → IaC apply（§6）→ `make -C /srv/alicedev/app up`。astrbot 配置只播种（ARCHITECTURE §11）：`up` 不改数据卷里已有的 `cmd_config.json`、`config/alicedev_config.json`；管理员名单、平台、插件配置的改动按 `docs/runbook.md` §4 在 AstrBot 里做 |
 | `deploy/paseo`、`deploy/astrbot` Dockerfile、`harness/` | 宿主检出切到新 SHA（`deployctl apply`）→ 打回滚标签 → `make -C /srv/alicedev/app build` → `make -C /srv/alicedev/app up` |
 | `gateway/` | 宿主检出切到新 SHA（同时改了 `bot/` 时，先按第一行跑 `deployrun`，它会一并切检出）→ `docker tag` 当前镜像为 `alicedev/gateway:rollback-<tag>` → `docker compose … build gateway` → `docker compose … up -d --no-deps gateway`。不动 paseo；重启网关会使尚未兑换的一次性链接失效 |
 | paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ IaC apply（§6）→ `make paseo-src` → 打回滚标签 → `build` → `up` → 按 §5 重新核对分享视图 |
@@ -74,6 +74,8 @@ make -C /srv/alicedev/app e2e-up    # 依赖 up 创建的 alicedev-e2e 网络
 make -C /srv/alicedev/app tg-up
 make -C /srv/alicedev/app fixed-main
 ```
+
+`up` 之后按 `docs/runbook.md` §4 设置第一位管理员（种子的 `admin_users` 为空），并验证一条管理员指令。
 
 ## 5. 部署后核验
 
@@ -105,10 +107,18 @@ cd ~/Ext/code/nekoringo-iac/apps/alicedev
 tofu plan && tofu apply
 ```
 
-`apply` 只落 `deploy/` 和 `.env`，不启停任何容器；改了 compose 或 astrbot 配置时，接着 `make up`。
+`apply` 只落 `deploy/` 和 `.env`，不启停任何容器；改了 compose 时，接着 `make up`。AstrBot 与 SnowLuma 的配置只播种（ARCHITECTURE §11），所以改这些凭据不会自动进已在跑的服务，要各消费者各改一处、各自生效：
+
+| 凭据 | 消费者 | 生效方式 |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | AstrBot `cmd_config.json` | 改后 `docker restart alicedev-astrbot` |
+| `ONEBOT_ACCESS_TOKEN` | AstrBot `cmd_config.json`（aiocqhttp 段）与 SnowLuma `config/onebot.json`（wsClient） | 两处一起改，两个容器各自重启 |
+| `ALICEDEV_INTERNAL_TOKEN` | AstrBot 插件配置 `internal_token`；gateway、paseo 的环境 | 插件配置改后重载插件；`.env` 改后 `up` 重建 gateway、paseo |
+| `GITHUB_TOKEN` | AstrBot 插件配置 `github_token`；paseo 的环境与宿主检出 fetch | 插件配置改后重载插件；`.env` 改后 `up` 重建 paseo |
 
 ## 7. 备份与回滚
 
 - 备份：DuckDB 在 `alicedev_astrbot_data` 卷的 `/AstrBot/data/plugin_data/alicedev/alicedev.duckdb`（用 `docker cp` 复制，连同 `.wal`）。不要从 astrbot 以外的进程打开它。paseo 状态在 `alicedev_paseo_home` 卷：`docker run --rm -v alicedev_paseo_home:/v:ro -v <dir>:/b alpine tar -C /v -czf /b/paseo_home.tgz .`。
+- 服务配置：AstrBot 的 `/AstrBot/data/cmd_config.json` 与 `/AstrBot/data/config/alicedev_config.json`（`alicedev_astrbot_data` 卷）、SnowLuma 的 `/data/config/onebot.json`（`qq-gateway-data` 卷）是服务自己的有状态数据，改动前先 `docker cp` 备份。不要用旧版 compose（无条件重铺的 init）回滚，它会覆盖这些配置；回滚 compose 用同样含 seed-only 的 revision。
 - bot/DSL 回滚：`deployrun` 失败会自动切回；手工回滚用 `deployctl rollback`（见 `tools/README.md`）。
 - 镜像回滚：把 `:rollback-<tag>` 标签打回运行标签，再 `make up`。
