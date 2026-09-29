@@ -467,7 +467,7 @@ alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <i
 - **页面主题（Alice 黑童话）**：网关自己出的 HTML 页共用一套主题，人设取 Alice（BLACK SOULS）——哥特洛丽塔、怀表、荆棘玫瑰、扑克花色、撕碎的童话书页。人设只体现在视觉和少量口吻上，文案说的是会话、链接、报告这些产品里的东西，不用「仙境」「茶会」这类和产品无关的意象，也没有「工作室」一类的品牌名。范围：链接确认页（`GET /t/<token>`）、链接失效页（403：无效/已使用/已过期，提示回群发 `/链接`）、需要授权页（cookie 校验失败的 403）、找不到页（404：报告不存在、网关路径不存在）、报告读取失败页（500）、paseo 不可用页（反代连不上 paseo 的 502，只对浏览器文档导航出主题页；资源、XHR、WebSocket 失败仍是纯文本）、会话页 `/_alicedev/`、报告页外框（正文保持浅色羊皮纸阅读面，pygments/mermaid 不变）。状态码、消费语义、自动提交与按钮 fallback 都不变，只换正文。反代成功返回的 paseo 页面、`/internal/*` 与静态资源的错误、405 不在范围内（不是给人看的页面）。
   - 资源只在 `gateway/static/alice/`，经 `/_alicedev/static/alice/<name>` 白名单下发，Content-Type 按扩展名给：`alice.css`（设计 token 与组件）、`alice-hero.webp`（确认页、会话页插画）、`alice-torn.webp`（所有错误页插画）、`alice-emblem.webp`（徽记）、`damask.webp`（底纹）、`alice-icon.png`（favicon）、IM Fell English 的 `fell-sc.woff2` `fell-italic.woff2` 及 `OFL-IMFell.txt`。中文字体用系统衬线栈，不自带。
   - 除报告页外，主题页不含内联 `<style>`、不引用外部来源；CSP `default-src 'none'; style-src 'self'; img-src 'self'; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`，确认页另加自动提交脚本的 `script-src 'sha256-…'`。
-  - token：`--night #0f0b12`、`--velvet #1b1320`、`--blood #7d1426`、`--rose #b8324a`、`--gilt #c8a45d`、`--parchment #f1e7d2`、`--ink #231a1f`。图片卡片（`templates/cards/`）目前没有采用这套主题；要不要推广由用户决定，推广时从 `alice.css` 取 token，插画走 data URI 或公开静态 URL。
+  - token：`--night #0f0b12`、`--velvet #1b1320`、`--blood #7d1426`、`--rose #b8324a`、`--gilt #c8a45d`、`--parchment #f1e7d2`、`--ink #231a1f`。图片卡片（`templates/cards/`）不采用这套主题，保持现有样式。
 - `PASEO_PASSWORD` 必须非空（为空时 paseo daemon 不做鉴权）。
 - 访问日志脱敏：`/t/<token>` 记为 `/t/***`；不记录 cookie。
 
@@ -475,7 +475,7 @@ alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <i
 
 配置（`bot/_conf_schema.json`）：`allowed_chats: string[]`（chat_key 白名单；空 = 全部允许）、`admin_users: string[]`（user_key）、`internal_token`、`gateway_url`、`public_base_url`、`reports_root`、`github_token?`、`default_repo: TraderAlice/OpenAlice`。
 
-这些配置由 AstrBot 持有（§11「AstrBot 配置」）：`admin_users` 只在 AstrBot 里改（dashboard 的插件配置页，或改数据卷里的 `config/alicedev_config.json` 后重载插件），不来自部署环境变量，`deploy/.env` 里没有它。
+这些配置由 AstrBot 持有（§11「服务配置归服务」）：`admin_users` 只在 AstrBot 里改（dashboard 的插件配置页，或改数据卷里的 `config/alicedev_config.json` 后重载插件），不来自部署环境变量，`deploy/.env` 里没有它。
 
 分发：单个 `@filter.event_message_type(ALL)` 入口；以 `/` 或 `／` 开头的按指令 DSL 解析，其余按 `routes.yaml`。中间件顺序：白名单 → 解析（指令名/别名 → 子指令词 → 紧跟的 `%n`（`%`/`％` 同义）→ 按 `usage` 取其余参数、按类型解析）→ 权限 → 动作 → 按结果键回话。权限不足时私下不回（避免刷屏），日志记录。`owner` 权限 = 该会话创建者或管理员。agent 经 `/v1/commands` 调用指令时走同一套解析、权限与动作，权限按会话创建者判断（§6.1）。
 
