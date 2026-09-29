@@ -7,7 +7,7 @@
       {
         "name": "astrbot-reverse",
         "enabled": true,
-        "url": "ws://astrbot:6199",
+        "url": "ws://astrbot:6199/ws",
         "role": "Universal",
         "accessToken": "${ONEBOT_ACCESS_TOKEN}",
         "messageFormat": "array",
