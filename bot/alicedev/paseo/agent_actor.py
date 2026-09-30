@@ -271,6 +271,7 @@ class AgentActor:
                 _LOG.warning("eviction park failed for %s", current.agent_ref, exc_info=True)
                 return False
             await self._agents.set_status(current.agent_ref, AgentRowStatus.CLOSED)
+            _LOG.info("parked %s (%s) to free an online slot", current.agent_ref, current.agent_id)
             return True
 
     async def archive(self, agent: AgentRow) -> None:
