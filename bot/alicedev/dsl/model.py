@@ -212,9 +212,9 @@ AGENT_ACTIONS: tuple[type, ...] = (
 
 # Fixed result keys per action (``say`` may only override these).
 RESULT_KEYS: Mapping[type, tuple[str, ...]] = {
-    StartAction: ("created", "queued", "failed", "sent", "busy"),
-    GithubAction: ("created", "fetch_failed", "failed"),
-    SendAction: ("ok", "not_found", "not_conversational", "busy"),
+    StartAction: ("created", "queued", "waiting", "failed", "sent", "busy"),
+    GithubAction: ("created", "waiting", "fetch_failed", "failed"),
+    SendAction: ("ok", "not_found", "not_conversational", "busy", "full"),
     SessionShowAction: ("not_found",),
     SessionSwitchAction: ("ok", "not_found"),
     SessionRenameAction: ("ok", "not_found"),

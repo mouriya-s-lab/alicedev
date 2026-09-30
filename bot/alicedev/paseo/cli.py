@@ -18,6 +18,7 @@ from alicedev.paseo.control import (
     AgentHandle,
     AgentStatus,
     GitResult,
+    LiveAgent,
     PaseoControl,
     PaseoError,
     WorkspaceRef,
@@ -126,20 +127,34 @@ class CliPaseoControl(PaseoControl):
         except cli_json.CliShapeError as exc:
             raise PaseoError(str(exc)) from exc
 
-    async def close(self, agent_id: str) -> None:
-        # paseo 0.8.0 has no "release runtime" verb; stop interrupts a running turn and
-        # is a no-op for idle agents, which is the only case the sweeper closes.
-        argv = self._exec(self._paseo, "stop", agent_id)
-        rc, out, err = await self._runner(argv, self._timeout)
-        if rc != 0:
-            raise PaseoError(f"paseo stop exited {rc}: {(err or out).strip()[:500]}")
+    async def live_agents(self) -> list[LiveAgent]:
+        doc = await self._paseo_json("ls")
+        try:
+            pairs = cli_json.ls_agents(doc)
+        except cli_json.CliShapeError as exc:
+            raise PaseoError(str(exc)) from exc
+        return [LiveAgent(agent_id=i, status=s) for i, s in pairs if s is not AgentStatus.CLOSED]
+
+    async def park(self, agent_id: str) -> None:
+        # Without --force paseo archives only an idle agent (a running one is refused).
+        # Archive terminates the agent's omp runtime and keeps the record; `send` later
+        # unarchives it and resumes the persisted conversation. `stop` cannot do this:
+        # it is a no-op for idle agents.
+        await self._archive(agent_id, force=False)
 
     async def archive(self, agent_id: str) -> None:
         # --force: ending a session archives its agents even mid-turn.
-        argv = self._exec(self._paseo, "archive", "--force", agent_id)
+        await self._archive(agent_id, force=True)
+
+    async def _archive(self, agent_id: str, *, force: bool) -> None:
+        argv = self._exec(self._paseo, "archive", *(("--force",) if force else ()), agent_id)
         rc, out, err = await self._runner(argv, self._timeout)
-        if rc != 0:
-            raise PaseoError(f"paseo archive exited {rc}: {(err or out).strip()[:500]}")
+        if rc == 0:
+            return
+        message = (err or out).strip()
+        if "already archived" in message:
+            return  # the wanted end state (no resident runtime) already holds
+        raise PaseoError(f"paseo archive exited {rc}: {message[:500]}")
 
     # --- workspaces ------------------------------------------------------------
 

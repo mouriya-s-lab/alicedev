@@ -1,6 +1,6 @@
-"""Idle sweeper (ARCHITECTURE §4): close conversational agents idle for 12h.
+"""Idle sweeper (ARCHITECTURE §4): park conversational agents idle for ``idle_park_seconds``.
 
-Closing is resumable and never changes the session state.
+Parking releases the agent's runtime and is resumable; it never changes the session state.
 """
 
 from __future__ import annotations
@@ -55,14 +55,14 @@ class IdleSweeper:
                 _LOG.exception("sweeper pass failed")
 
     async def sweep_once(self) -> int:
-        cutoff = self._actor.now() - timedelta(seconds=self._config.idle_close_seconds)
+        cutoff = self._actor.now() - timedelta(seconds=self._config.idle_park_seconds)
         naive_cutoff = cutoff.replace(tzinfo=None)
-        closed = 0
+        parked = 0
         for agent in await self._agents.idle_candidates(naive_cutoff):
             if not await self._is_conversational(agent):
                 continue
-            if await self._actor.close_if_idle(agent, older_than=cutoff):
-                closed += 1
-        if closed:
-            _LOG.info("sweeper closed %d idle agent(s)", closed)
-        return closed
+            if await self._actor.park_if_idle(agent, older_than=cutoff):
+                parked += 1
+        if parked:
+            _LOG.info("sweeper parked %d idle agent(s)", parked)
+        return parked

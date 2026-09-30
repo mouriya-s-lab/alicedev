@@ -87,10 +87,15 @@
     "description": "GitHub 默认仓库（#n 解析）。",
     "default": "TraderAlice/OpenAlice"
   },
-  "idle_close_seconds": {
+  "idle_park_seconds": {
     "type": "int",
-    "description": "对话型 agent 空闲关闭阈值（秒）。默认 12 小时。",
-    "default": 43200
+    "description": "对话型 agent 空闲停放阈值（秒）：停放会释放 agent 进程，下次发消息时自动唤醒并保留对话。默认 30 分钟。",
+    "default": 1800
+  },
+  "max_live_agents": {
+    "type": "int",
+    "description": "同时常驻 runtime 的 paseo agent 上限。满员时先停放最久未活动的空闲 agent，仍满则新会话排队。默认 4。",
+    "default": 4
   },
   "sweeper_interval_seconds": {
     "type": "int",

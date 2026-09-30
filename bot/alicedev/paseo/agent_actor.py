@@ -16,7 +16,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Union
 
 from alicedev.ids import new_msg_ref
-from alicedev.paseo.control import PaseoControl, PaseoError
+from alicedev.paseo.control import AgentStatus, PaseoControl, PaseoError
+from alicedev.paseo.slots import SlotPool
 from alicedev.store.agents_repo import AgentRow, AgentRowStatus
 
 if TYPE_CHECKING:
@@ -44,12 +45,18 @@ class AgentStartFailed:
     reason: str
 
 
-StartOutcome = Union[AgentStarted, AgentStartFailed]
+@dataclass(frozen=True)
+class AgentStartDeferred:
+    """No online slot was free; nothing was created."""
+
+
+StartOutcome = Union[AgentStarted, AgentStartFailed, AgentStartDeferred]
 
 
 class InjectOutcome(str, Enum):
     OK = "ok"
     BUSY = "busy"
+    FULL = "full"
     DUPLICATE = "duplicate"
     FAILED = "failed"
 
@@ -70,6 +77,9 @@ class AgentActor:
         self._paseo = paseo
         self._config = config
         self._locks: dict[str, asyncio.Lock] = {}
+        self._pool = SlotPool(
+            paseo=paseo, agents=agents, cap=config.max_live_agents, park=self._park_if_free
+        )
 
     def _lock(self, agent_ref: str) -> asyncio.Lock:
         return self._locks.setdefault(agent_ref, asyncio.Lock())
@@ -88,44 +98,53 @@ class AgentActor:
         prompt: str,
         trigger_msg_ref: str | None,
         sender_key: str | None,
+        wait_seconds: float = 0.0,
     ) -> StartOutcome:
-        await self._agents.create_creating(
-            agent_ref=agent_ref, session_id=session_id, state=state, provider=provider
-        )
-        msg_ref = trigger_msg_ref or new_msg_ref()
-        if trigger_msg_ref is not None:
-            await self._messages.attach(trigger_msg_ref, agent_ref=agent_ref, text=prompt)
-        else:
-            await self._messages.claim(
-                msg_ref=msg_ref, chat_key=chat_key, platform_message_id=None,
-                sender_key=sender_key, sender_name=None, content=None, text=prompt,
-                session_id=session_id, agent_ref=agent_ref,
+        """Create the agent once an online slot is free (§4); otherwise create nothing."""
+        async with self._pool.admit(wait_seconds=wait_seconds) as admitted:
+            if not admitted:
+                return AgentStartDeferred()
+            await self._agents.create_creating(
+                agent_ref=agent_ref, session_id=session_id, state=state, provider=provider
             )
-        ingress = build_ingress_command(agent_ref=agent_ref, msg_ref=msg_ref, text=prompt)
-        async with self._lock(agent_ref):
-            try:
-                handle = await self._paseo.create(
-                    agent_ref=agent_ref, provider=provider, cwd=cwd, title=title,
-                    initial_prompt=ingress, workspace_id=workspace_id,
+            msg_ref = trigger_msg_ref or new_msg_ref()
+            if trigger_msg_ref is not None:
+                await self._messages.attach(trigger_msg_ref, agent_ref=agent_ref, text=prompt)
+            else:
+                await self._messages.claim(
+                    msg_ref=msg_ref, chat_key=chat_key, platform_message_id=None,
+                    sender_key=sender_key, sender_name=None, content=None, text=prompt,
+                    session_id=session_id, agent_ref=agent_ref,
                 )
-            except PaseoError as exc:
-                _LOG.warning("create failed for %s, trying find_by_label: %s", agent_ref, exc)
+            ingress = build_ingress_command(agent_ref=agent_ref, msg_ref=msg_ref, text=prompt)
+            async with self._lock(agent_ref):
                 try:
-                    handle = await self._paseo.find_by_label(agent_ref)
-                except PaseoError:
-                    handle = None
-                if handle is None:
-                    await self._agents.set_status(agent_ref, AgentRowStatus.FAILED)
-                    return AgentStartFailed(str(exc))
-            await self._agents.set_active(
-                agent_ref,
-                agent_id=handle.agent_id,
-                workspace_id=handle.workspace_id or workspace_id,
-                server_id=handle.server_id,
-            )
-        row = await self._agents.get(agent_ref)
-        assert row is not None
-        return AgentStarted(row)
+                    handle = await self._paseo.create(
+                        agent_ref=agent_ref, provider=provider, cwd=cwd, title=title,
+                        initial_prompt=ingress, workspace_id=workspace_id,
+                    )
+                except PaseoError as exc:
+                    _LOG.warning("create failed for %s, trying find_by_label: %s", agent_ref, exc)
+                    try:
+                        handle = await self._paseo.find_by_label(agent_ref)
+                    except PaseoError:
+                        handle = None
+                    if handle is None:
+                        await self._agents.set_status(agent_ref, AgentRowStatus.FAILED)
+                        return AgentStartFailed(str(exc))
+                await self._agents.set_active(
+                    agent_ref,
+                    agent_id=handle.agent_id,
+                    workspace_id=handle.workspace_id or workspace_id,
+                    server_id=handle.server_id,
+                )
+            row = await self._agents.get(agent_ref)
+            assert row is not None
+            return AgentStarted(row)
+
+    async def has_room(self) -> bool:
+        """Cheap pre-check before a dispatch does any work (the real admission is in ``start``)."""
+        return await self._pool.can_admit()
 
     async def recover_creating(self, agent: AgentRow) -> AgentRowStatus:
         """After a restart: an agent stuck in ``creating`` is found by label or failed."""
@@ -168,36 +187,45 @@ class AgentActor:
             )
             if not claimed.fresh:
                 return InjectOutcome.DUPLICATE
+            ingress = build_ingress_command(agent_ref=current.agent_ref, msg_ref=msg_ref, text=text)
             try:
-                if not await self._wait_until_idle(current.agent_id):
+                settled = await self._settle(current.agent_id)
+                if settled is None:
                     await self._messages.delete(msg_ref)
                     return InjectOutcome.BUSY
-                await self._paseo.send(
-                    current.agent_id,
-                    build_ingress_command(agent_ref=current.agent_ref, msg_ref=msg_ref, text=text),
-                )
+                if settled is AgentStatus.CLOSED:
+                    # A parked (or archived) agent needs an online slot before it may wake.
+                    async with self._pool.admit(exclude=(current.agent_id,)) as admitted:
+                        if not admitted:
+                            await self._messages.delete(msg_ref)
+                            return InjectOutcome.FULL
+                        await self._paseo.send(current.agent_id, ingress)
+                else:
+                    await self._paseo.send(current.agent_id, ingress)
             except PaseoError:
                 await self._messages.delete(msg_ref)
                 _LOG.exception("inject failed for %s", current.agent_ref)
                 return InjectOutcome.FAILED
             await self._agents.touch(current.agent_ref)
-            if current.status is AgentRowStatus.CLOSED:
+            if current.status is AgentRowStatus.CLOSED or settled is AgentStatus.CLOSED:
                 await self._agents.set_status(current.agent_ref, AgentRowStatus.ACTIVE)
             return InjectOutcome.OK
 
-    async def _wait_until_idle(self, agent_id: str) -> bool:
+    async def _settle(self, agent_id: str) -> AgentStatus | None:
+        """The agent's status once it is not mid-turn; ``None`` if it stays busy too long."""
         waited = 0.0
         interval = self._config.inject_poll_seconds
         while True:
             status = await self._paseo.status(agent_id)
             if not status.busy:
-                return True
+                return status
             if waited >= self._config.inject_wait_max_seconds:
-                return False
+                return None
             await asyncio.sleep(interval)
             waited += interval
 
-    async def close_if_idle(self, agent: AgentRow, *, older_than: datetime) -> bool:
+    async def park_if_idle(self, agent: AgentRow, *, older_than: datetime) -> bool:
+        """Sweeper: park an agent that has been idle since before ``older_than``."""
         cutoff = older_than.astimezone(timezone.utc).replace(tzinfo=None) if older_than.tzinfo else older_than
         async with self._lock(agent.agent_ref):
             current = await self._agents.get(agent.agent_ref)
@@ -209,13 +237,41 @@ class AgentActor:
             if last >= cutoff:
                 return False
             try:
-                if (await self._paseo.status(current.agent_id)).busy:
+                status = await self._paseo.status(current.agent_id)
+                if status.busy:
                     return False
-                await self._paseo.close(current.agent_id)
+                if status is not AgentStatus.CLOSED:  # already parked or archived elsewhere: only record it
+                    await self._paseo.park(current.agent_id)
             except PaseoError:
-                _LOG.warning("idle close failed for %s", current.agent_ref, exc_info=True)
+                _LOG.warning("idle park failed for %s", current.agent_ref, exc_info=True)
                 return False
             await self._agents.set_status(current.agent_ref, AgentRowStatus.CLOSED)
+            return True
+
+    async def _park_if_free(self, agent: AgentRow) -> bool:
+        """Slot pool victim: park an idle agent nobody is using right now.
+
+        Never waits for a lease: a leased agent belongs to a caller that may itself be
+        waiting on the pool, so skipping it is the only deadlock-free choice.
+        """
+        lock = self._lock(agent.agent_ref)
+        if lock.locked():
+            return False
+        async with lock:
+            current = await self._agents.get(agent.agent_ref)
+            if current is None or not current.agent_id or current.status not in (
+                AgentRowStatus.ACTIVE, AgentRowStatus.CLOSED
+            ):
+                return False
+            try:
+                if await self._paseo.status(current.agent_id) is not AgentStatus.IDLE:
+                    return False
+                await self._paseo.park(current.agent_id)
+            except PaseoError:
+                _LOG.warning("eviction park failed for %s", current.agent_ref, exc_info=True)
+                return False
+            await self._agents.set_status(current.agent_ref, AgentRowStatus.CLOSED)
+            _LOG.info("parked %s (%s) to free an online slot", current.agent_ref, current.agent_id)
             return True
 
     async def archive(self, agent: AgentRow) -> None:

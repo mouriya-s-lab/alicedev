@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 if TYPE_CHECKING:
     from alicedev.store.db import Store
@@ -124,6 +124,16 @@ class AgentsRepo:
     async def by_status(self, status: AgentRowStatus) -> list[AgentRow]:
         rows = await self._store.fetch_all(
             f"SELECT {_COLUMNS} FROM agents WHERE status = ?", (status.value,)
+        )
+        return [_row(r) for r in rows]
+
+    async def by_agent_ids(self, agent_ids: Sequence[str]) -> list[AgentRow]:
+        """The bot's own rows for these paseo agent ids (unknown ids are simply absent)."""
+        if not agent_ids:
+            return []
+        marks = ",".join("?" for _ in agent_ids)
+        rows = await self._store.fetch_all(
+            f"SELECT {_COLUMNS} FROM agents WHERE agent_id IN ({marks})", tuple(agent_ids)
         )
         return [_row(r) for r in rows]
 

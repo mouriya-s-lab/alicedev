@@ -45,7 +45,8 @@ class PluginConfig:
     docker_bin: str = "docker"
     internal_api_host: str = "0.0.0.0"
     internal_api_port: int = 6200
-    idle_close_seconds: int = 12 * 3600
+    idle_park_seconds: int = 30 * 60
+    max_live_agents: int = 4
     sweeper_interval_seconds: int = 600
     inject_wait_max_seconds: int = 600
     inject_poll_seconds: float = 2.0
@@ -102,7 +103,8 @@ class PluginConfig:
             docker_bin=str(get("docker_bin") or "docker"),
             internal_api_host=str(get("internal_api_host", "0.0.0.0")),
             internal_api_port=int(get("internal_api_port", 6200)),
-            idle_close_seconds=int(get("idle_close_seconds", 12 * 3600)),
+            idle_park_seconds=int(get("idle_park_seconds", 30 * 60)),
+            max_live_agents=max(1, int(get("max_live_agents", 4))),
             sweeper_interval_seconds=int(get("sweeper_interval_seconds", 600)),
             inject_wait_max_seconds=int(get("inject_wait_max_seconds", 600)),
             inject_poll_seconds=float(get("inject_poll_seconds", 2.0)),
