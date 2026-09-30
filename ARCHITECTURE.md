@@ -279,7 +279,7 @@ bot 侧 `PaseoControl`（`bot/alicedev/paseo/`）的每个操作 = 一次 `tools
 | `status(agent_id)` → idle/running/permission/closed/error | `paseo inspect <agent_id>`（`Archived` 为真也算 `closed`） |
 | `live_agents()` → 在线 agent 列表 | `paseo ls`（默认不含已归档；状态 `closed` 不占 runtime，其余状态都算在线） |
 | `park(agent_id)`（停放，可恢复） | `paseo archive <agent_id>`（不加 `--force`：只归档 idle agent，运行中的会被 paseo 拒绝）。paseo 源码里 archive 会终止该 agent 的 omp 进程树并保留记录，之后 `paseo send` 自动取消归档并从持久化的 omp session 文件恢复对话；`paseo stop` 对 idle agent 是空操作，不用来释放 |
-| `archive(agent_id)` | `paseo archive <agent_id> --force`（agent 仍在运行时也归档） |
+| `archive(agent_id)` | `paseo archive <agent_id> --force`（agent 仍在运行时也归档）。`park` 与 `archive` 遇到 paseo 回「already archived」都算成功：要的终态（没有常驻 runtime）已经成立 |
 | `worktree_create(repo, base_ref, slug)` → workspace_id + 目录 | `paseo workspace create --isolation worktree --path <repo> --mode branch-off --base <base_ref> --worktree-slug <slug>` |
 | `worktree_archive(workspace_id)` | `paseo workspace archive <workspace_id>` |
 | `workspace_register(path)` → workspace_id | `paseo workspace create --isolation local --path <path>`：`cwd` 场景为每个会话登记一个 local workspace（agent 与分享链接都用它）；`repo` 场景在 `main_sync_failed` 时登记 fixed-main（只为让人能经分享链接查看，不在其中起 agent） |
@@ -307,7 +307,7 @@ stateDiagram-v2
 
 - **受限对象**是 paseo 里常驻 runtime 的 agent（`live_agents()`：`paseo ls` 中未归档且状态非 `closed` 的），不是会话，也不是 `agents` 表的行；数据源是 paseo，DuckDB 里的状态只用来挑选驱逐对象。
 - **取名额**：`create` 与向 `closed` agent 的注入都要先经插件进程内唯一的 `SlotPool`（插件是唯一调度写者；一把 asyncio 锁串行发放，名额持有到 `create`/`send` 返回）。持锁后：`live_agents()`（`paseo ls` 失败一律视为满员，不放行）→ 在线数低于上限则放行；否则从在线 agent 里挑本 bot 认识的、`idle`、`last_activity_at` 最早的（不含请求者自己，且其 agent 租约当前未被占用）逐个 `park`，直到低于上限；挑不出可停放的（都在 `running/permission`，或不是本 bot 的 agent）则不放行。paseo 已在线超过上限时同样先停放到低于上限。
-- **未放行**：新会话保持内建 `queued`（不创建 agent；派发前就检查有没有名额，已经建好的工作区留着复用），后台每 10 s 按创建顺序重试、会话结束时立即重试，先来的先派发；向已停放会话注入得到 `busy`。由 AI 转移触发的下一状态 agent（如 `upgrade-bot`）在上一状态 agent 归档后取名额，最多等 60 s，仍取不到则会话进入 `failed`。
+- **未放行**：新会话保持内建 `queued`（不创建 agent；派发前就检查有没有名额，已经建好的工作区留着复用），后台每 10 s 按创建顺序重试、会话结束时立即重试，先来的先派发；新会话进来时若已有更早的会话在等名额，即使此刻有空名额也排在它们后面（由重试按顺序派发）；向已停放会话注入得到 `busy`。由 AI 转移触发的下一状态 agent（如 `upgrade-bot`）在上一状态 agent 归档后取名额，最多等 60 s，仍取不到则会话进入 `failed`。
 - 名额数与停放阈值是插件配置（§9），不在 DSL 里。
 
 ## 5. ingress 命令与 omp 扩展

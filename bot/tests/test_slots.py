@@ -53,6 +53,29 @@ def test_concurrent_starts_never_exceed_cap_and_the_rest_wait(tmp_path: Path) ->
     run(main())
 
 
+def test_new_session_queues_behind_older_waiters_even_when_a_slot_is_free(tmp_path: Path) -> None:
+    async def main() -> None:
+        env = await make_env(tmp_path)
+        env.paseo.create_status = AgentStatus.RUNNING
+        await _sessions(env, CAP + 2, prefix="f")
+        waiting = await env.sessions.in_states(("queued",))
+        assert len(waiting) == 2
+
+        # A slot frees up, then a brand-new session arrives before the waiter loop runs.
+        env.paseo.statuses[env.paseo.created[0]["agent_id"]] = AgentStatus.CLOSED
+        await env.dispatcher.handle(inbound("/帮我调查 late", message_id="late"))
+        await env.drain()
+
+        states = {s.no: s.state for s in [await env.sessions.get(w.session_id) for w in waiting]}
+        newest = await env.sessions.by_no(CHAT, CAP + 3)
+        assert states[waiting[0].no] == "discussing"  # the oldest waiter took the free slot
+        assert states[waiting[1].no] == "queued" and newest.state == "queued"
+        assert len(env.paseo.created) == CAP + 1
+        await env.close()
+
+    run(main())
+
+
 def test_full_pool_parks_the_least_recently_active_idle_agent(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)

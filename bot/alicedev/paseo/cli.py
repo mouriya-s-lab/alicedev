@@ -140,17 +140,21 @@ class CliPaseoControl(PaseoControl):
         # Archive terminates the agent's omp runtime and keeps the record; `send` later
         # unarchives it and resumes the persisted conversation. `stop` cannot do this:
         # it is a no-op for idle agents.
-        argv = self._exec(self._paseo, "archive", agent_id)
-        rc, out, err = await self._runner(argv, self._timeout)
-        if rc != 0:
-            raise PaseoError(f"paseo archive exited {rc}: {(err or out).strip()[:500]}")
+        await self._archive(agent_id, force=False)
 
     async def archive(self, agent_id: str) -> None:
         # --force: ending a session archives its agents even mid-turn.
-        argv = self._exec(self._paseo, "archive", "--force", agent_id)
+        await self._archive(agent_id, force=True)
+
+    async def _archive(self, agent_id: str, *, force: bool) -> None:
+        argv = self._exec(self._paseo, "archive", *(("--force",) if force else ()), agent_id)
         rc, out, err = await self._runner(argv, self._timeout)
-        if rc != 0:
-            raise PaseoError(f"paseo archive exited {rc}: {(err or out).strip()[:500]}")
+        if rc == 0:
+            return
+        message = (err or out).strip()
+        if "already archived" in message:
+            return  # the wanted end state (no resident runtime) already holds
+        raise PaseoError(f"paseo archive exited {rc}: {message[:500]}")
 
     # --- workspaces ------------------------------------------------------------
 

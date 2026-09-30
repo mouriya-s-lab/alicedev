@@ -95,6 +95,18 @@ def test_cli_control_errors() -> None:
     asyncio.run(main())
 
 
+def test_archive_and_park_treat_an_already_archived_agent_as_done() -> None:
+    async def runner(argv, timeout):
+        return 1, "", "Error: Agent cccfd94 is already archived"
+
+    async def main() -> None:
+        c = CliPaseoControl(runner=runner)
+        await c.archive("cccfd94")
+        await c.park("cccfd94")
+
+    asyncio.run(main())
+
+
 # --- mainsync ---------------------------------------------------------------------------
 
 

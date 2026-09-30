@@ -250,6 +250,10 @@ class Scheduler:
         async with self._lock(scenario.name):
             if scenario.exclusive and await self._exclusive_busy(scenario, row.session_id):
                 return StartResult(StartOutcome.QUEUED, row)
+            if await self._slot_waiters_before(row.session_id):
+                # First come, first served: older sessions are still waiting for a slot.
+                self._spawn(self._guard(self.retry_waiting()))
+                return StartResult(StartOutcome.WAITING, row, SLOTS_FULL)
             ok, reason = await self._dispatch(row, notify=False, trigger_msg_ref=trigger_ref)
         current = await self._sessions.get(row.session_id)
         if current is not None and current.state == QUEUED:
@@ -293,6 +297,19 @@ class Scheduler:
         for other in await self._sessions.in_states((QUEUED,)):
             if other.scenario == scenario.name and other.session_id < exclude:
                 return True
+        return False
+
+    async def _slot_waiters_before(self, session_id: int) -> bool:
+        """Is an older queued session waiting for an online slot (not held back by exclusivity)?"""
+        for other in await self._sessions.in_states((QUEUED,)):
+            if other.session_id >= session_id:
+                continue
+            other_scenario = self.scenario(other.scenario)
+            if other_scenario is None:
+                continue
+            if other_scenario.exclusive and await self._exclusive_busy(other_scenario, other.session_id):
+                continue
+            return True
         return False
 
     async def _dispatch(
