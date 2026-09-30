@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
 from pathlib import Path
 
 from rt_support import CHAT, make_env, inbound
