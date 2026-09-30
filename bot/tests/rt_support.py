@@ -26,6 +26,7 @@ from alicedev.paseo.control import (  # noqa: E402
     AgentHandle,
     AgentStatus,
     GitResult,
+    LiveAgent,
     PaseoControl,
     PaseoError,
     WorkspaceRef,
@@ -91,11 +92,13 @@ class FakePaseo(PaseoControl):
         self.created: list[dict[str, Any]] = []
         self.sent: list[tuple[str, str]] = []
         self.archived: list[str] = []
-        self.closed: list[str] = []
+        self.parked: list[str] = []
+        self.fail_live = False
         self.workspaces: list[tuple[str, str]] = []
         self.worktrees: list[dict[str, str]] = []
         self.archived_workspaces: list[str] = []
         self.statuses: dict[str, AgentStatus] = {}
+        self.create_status = AgentStatus.IDLE  # what a freshly created agent reports
         self.fail_create = False
         self.git_overrides: dict[tuple[str, ...], GitResult] = {}
         self._n = 0
@@ -110,7 +113,7 @@ class FakePaseo(PaseoControl):
         agent_id = self._next("ag")
         self.created.append(dict(agent_ref=agent_ref, provider=provider, cwd=cwd, title=title,
                                  prompt=initial_prompt, workspace_id=workspace_id, agent_id=agent_id))
-        self.statuses[agent_id] = AgentStatus.IDLE
+        self.statuses[agent_id] = self.create_status
         return AgentHandle(agent_id=agent_id, workspace_id=workspace_id, server_id="srv1")
 
     async def find_by_label(self, agent_ref):
@@ -121,12 +124,23 @@ class FakePaseo(PaseoControl):
 
     async def send(self, agent_id, text):
         self.sent.append((agent_id, text))
+        if self.statuses.get(agent_id) is AgentStatus.CLOSED:  # paseo wakes a parked agent
+            self.statuses[agent_id] = AgentStatus.IDLE
 
     async def status(self, agent_id):
         return self.statuses.get(agent_id, AgentStatus.IDLE)
 
-    async def close(self, agent_id):
-        self.closed.append(agent_id)
+    async def live_agents(self):
+        if self.fail_live:
+            raise PaseoError("paseo ls unavailable")
+        return [
+            LiveAgent(i, s) for i, s in self.statuses.items()
+            if s is not AgentStatus.CLOSED and i not in self.archived
+        ]
+
+    async def park(self, agent_id):
+        self.parked.append(agent_id)
+        self.statuses[agent_id] = AgentStatus.CLOSED
 
     async def archive(self, agent_id):
         self.archived.append(agent_id)

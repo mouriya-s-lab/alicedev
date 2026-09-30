@@ -100,6 +100,21 @@ def ls_agent_ids(doc: Any) -> list[str]:
     return ids
 
 
+def ls_agents(doc: Any) -> list[tuple[str, AgentStatus]]:
+    """``ls --json`` (default view, archived excluded) as ``(agent id, status)`` pairs."""
+    if not isinstance(doc, list):
+        raise CliShapeError("ls: expected list")
+    out: list[tuple[str, AgentStatus]] = []
+    for item in doc:
+        if not isinstance(item, Mapping):
+            raise CliShapeError(f"ls: expected objects, got {item!r}")
+        agent_id = _get(item, "id", "agentId", "Id")
+        if not isinstance(agent_id, str) or not agent_id:
+            raise CliShapeError(f"ls: no id in {item!r}")
+        out.append((agent_id, map_status(_get(item, "status", "Status"))))
+    return out
+
+
 def inspect_status(doc: Any) -> AgentStatus:
     if not isinstance(doc, Mapping):
         raise CliShapeError("inspect: expected object")

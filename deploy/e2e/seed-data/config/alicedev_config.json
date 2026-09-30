@@ -13,6 +13,7 @@
   "images_root": "/AstrBot/data/plugin_data/alicedev/images",
   "github_token": "",
   "default_repo": "TraderAlice/OpenAlice",
-  "idle_close_seconds": 43200,
+  "idle_park_seconds": 1800,
+  "max_live_agents": 4,
   "sweeper_interval_seconds": 600
 }

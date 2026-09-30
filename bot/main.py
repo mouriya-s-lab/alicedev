@@ -164,6 +164,7 @@ class AliceDevPlugin(Star):
         await self._api.start()
         self._sweeper.start()
         await scheduler.recover()
+        scheduler.start_background()
         _LOG.info(
             "alicedev initialized: %d commands, %d scenarios, %d DSL errors",
             len(registry.command_list()), len(registry.scenarios), len(registry.errors),

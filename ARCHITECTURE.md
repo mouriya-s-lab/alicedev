@@ -53,7 +53,7 @@ flowchart LR
 
 | 进程 | 语言 | 职责 |
 |---|---|---|
-| `astrbot` + 插件 `bot/` | Python 3.11 | **DSL**：加载与校验 `templates/`，按 DSL 分发指令与路由。**传输**：出站队列、渲染、内部 API、GitHub 预取、报告发布、收藏。**调度**：会话状态机、agent 生命周期（含 12h 空闲关闭）、当前会话指针。**可见性**：只放可见状态进聊天 |
+| `astrbot` + 插件 `bot/` | Python 3.11 | **DSL**：加载与校验 `templates/`，按 DSL 分发指令与路由。**传输**：出站队列、渲染、内部 API、GitHub 预取、报告发布、收藏。**调度**：会话状态机、agent 生命周期（含空闲停放与在线名额上限）、当前会话指针。**可见性**：只放可见状态进聊天 |
 | `snowluma` | — | 个人 QQ 的协议端与 OneBot v11 reverse-WS 客户端；登录态与设备身份在命名卷 |
 | `gateway/` | Python 3.11 | 一次性 token → cookie、反代 paseo（含 WS 子协议注入与分享视图样式注入）、报告 md 渲染、会话页 |
 | `paseo` | TS | **不可修改的已部署服务**，上游原样。agent 运行时 |
@@ -157,9 +157,9 @@ do:
 
 | 类型 | 动作 | 参数 | 结果键 | agent 可调用 |
 |---|---|---|---|---|
-| ai | `start` | `scenario`、`text` | `created`、`queued`、`failed`；`one_per_chat` 场景另有 `sent`、`busy`（§3.4） | 是 |
-| ai | `github` | `ref`、`scenarios: { issue, pr }` | `created`、`fetch_failed`、`failed` | 是 |
-| ai | `send` | `session`、`text` | `ok`、`not_found`、`not_conversational`、`busy` | 否 |
+| ai | `start` | `scenario`、`text` | `created`、`queued`、`waiting`（没有在线名额，§4）、`failed`；`one_per_chat` 场景另有 `sent`、`busy`（§3.4） | 是 |
+| ai | `github` | `ref`、`scenarios: { issue, pr }` | `created`、`waiting`、`fetch_failed`、`failed` | 是 |
+| ai | `send` | `session`、`text` | `ok`、`not_found`、`not_conversational`、`busy`、`full`（要唤醒的会话拿不到在线名额，§4） | 否 |
 | program | `session_show` | `session` | 会话卡（§3.5） | 是 |
 | program | `session_switch` | `session` | `ok`、`not_found` | 否 |
 | program | `session_rename` | `session`、`name` | `ok`、`not_found` | 是 |
@@ -276,8 +276,9 @@ bot 侧 `PaseoControl`（`bot/alicedev/paseo/`）的每个操作 = 一次 `tools
 | `create(agent_ref, provider, cwd, title, initial_prompt, workspace_id?)` | `paseo run "<initial_prompt>" --background --provider <provider_id> --cwd <cwd> --title <title> --label alicedev=<agent_ref> [--workspace <workspace_id>]` |
 | `find_by_label(agent_ref)` | `paseo ls` 过滤 label |
 | `send(agent_id, text)` | `paseo send <agent_id> "<text>" --no-wait`（不加 `--no-wait` 会等 agent 这一轮跑完才返回） |
-| `status(agent_id)` → idle/running/permission/closed/error | `paseo inspect <agent_id>` |
-| `close(agent_id)`（可恢复） | `paseo stop <agent_id>`（paseo 0.8.0 对 idle agent 是空操作，没有释放 runtime 的命令） |
+| `status(agent_id)` → idle/running/permission/closed/error | `paseo inspect <agent_id>`（`Archived` 为真也算 `closed`） |
+| `live_agents()` → 在线 agent 列表 | `paseo ls`（默认不含已归档；状态 `closed` 不占 runtime，其余状态都算在线） |
+| `park(agent_id)`（停放，可恢复） | `paseo archive <agent_id>`（不加 `--force`：只归档 idle agent，运行中的会被 paseo 拒绝）。paseo 源码里 archive 会终止该 agent 的 omp 进程树并保留记录，之后 `paseo send` 自动取消归档并从持久化的 omp session 文件恢复对话；`paseo stop` 对 idle agent 是空操作，不用来释放 |
 | `archive(agent_id)` | `paseo archive <agent_id> --force`（agent 仍在运行时也归档） |
 | `worktree_create(repo, base_ref, slug)` → workspace_id + 目录 | `paseo workspace create --isolation worktree --path <repo> --mode branch-off --base <base_ref> --worktree-slug <slug>` |
 | `worktree_archive(workspace_id)` | `paseo workspace archive <workspace_id>` |
@@ -291,16 +292,23 @@ stateDiagram-v2
   creating --> active: create 成功 或 find_by_label 找回
   creating --> failed: create 失败
   active --> active: 注入 / 回复（更新 last_activity_at）
-  active --> closed: 空闲 12h，sweeper 持锁调用 close
-  closed --> active: 注入前 paseo 自动 ensureAgentLoaded；status 观测 idle 即视为 active
+  active --> closed: 空闲超过 idle_park_seconds 被停放，或为腾出在线名额被驱逐（park）
+  closed --> active: 注入前先取得在线名额，再 send（paseo 取消归档并恢复对话）
   active --> archived: 会话离开该状态
   closed --> archived: 会话离开该状态
 ```
 
-- 创建：写 `agents(creating)` → `create`（首轮 prompt 以 ingress 命令注入，omp 扩展在模型前拦截，msg id 不入模型上下文）→ 响应丢失时 `find_by_label`（label `alicedev=agent_ref`）找回 → 写 `agent_id` → 转 `active`。`create` 与 `find_by_label` 都失败 → 会话进入内建 `failed`（附原因）。
-- 注入：持锁 → `status`；`running/permission` 则每 2s 轮询直到 idle（上限 10 min，超时为 `send` 的 `busy` 结果）→ `send` → 写 `messages` → 更新 `last_activity_at`。同一 agent 严格串行；不同 agent 并行。
-- 关闭：sweeper 每 10 min 扫对话态 agent 中 `status=active AND last_activity_at < now-12h` 的；持锁 → `status` 非 running/permission → `close` → `status=closed`。幂等，会话状态不变；由于 `stop` 对 idle agent 是空操作，关闭实际只落在 `agents.status`，下次注入时 paseo 自动加载。时钟只有一个：`agents.last_activity_at`（注入时间与入队时间的较大者），随 DuckDB 持久化。
+- 创建：先取得在线名额（见下）→ 写 `agents(creating)` → `create`（首轮 prompt 以 ingress 命令注入，omp 扩展在模型前拦截，msg id 不入模型上下文）→ 响应丢失时 `find_by_label`（label `alicedev=agent_ref`）找回 → 写 `agent_id` → 转 `active`。取不到名额则不创建、不写 `agents` 行。`create` 与 `find_by_label` 都失败 → 会话进入内建 `failed`（附原因）。
+- 注入：持锁 → `status`；`running/permission` 则每 2s 轮询直到 idle（上限 10 min，超时为 `send` 的 `busy` 结果）；`status` 为 `closed`（已停放或已被归档）则先取得在线名额，取不到同样得 `busy` → `send` → 写 `messages` → 更新 `last_activity_at`。同一 agent 严格串行；不同 agent 并行。
+- 停放：sweeper 每 10 min 扫对话态 agent 中 `status=active AND last_activity_at < now-idle_park_seconds`（默认 30 min）的；持锁 → `status` 非 running/permission → `park` → `status=closed`。幂等，会话状态不变，下次注入时唤醒。时钟只有一个：`agents.last_activity_at`（注入时间与入队时间的较大者），随 DuckDB 持久化。
 - 会话离开某状态或结束时，该状态的 agent `archive`。
+
+**在线名额（`max_live_agents`，默认 4）**
+
+- **受限对象**是 paseo 里常驻 runtime 的 agent（`live_agents()`：`paseo ls` 中未归档且状态非 `closed` 的），不是会话，也不是 `agents` 表的行；数据源是 paseo，DuckDB 里的状态只用来挑选驱逐对象。
+- **取名额**：`create` 与向 `closed` agent 的注入都要先经插件进程内唯一的 `SlotPool`（插件是唯一调度写者；一把 asyncio 锁串行发放，名额持有到 `create`/`send` 返回）。持锁后：`live_agents()`（`paseo ls` 失败一律视为满员，不放行）→ 在线数低于上限则放行；否则从在线 agent 里挑本 bot 认识的、`idle`、`last_activity_at` 最早的（不含请求者自己，且其 agent 租约当前未被占用）逐个 `park`，直到低于上限；挑不出可停放的（都在 `running/permission`，或不是本 bot 的 agent）则不放行。paseo 已在线超过上限时同样先停放到低于上限。
+- **未放行**：新会话保持内建 `queued`（不创建 agent；派发前就检查有没有名额，已经建好的工作区留着复用），后台每 10 s 按创建顺序重试、会话结束时立即重试，先来的先派发；向已停放会话注入得到 `busy`。由 AI 转移触发的下一状态 agent（如 `upgrade-bot`）在上一状态 agent 归档后取名额，最多等 60 s，仍取不到则会话进入 `failed`。
+- 名额数与停放阈值是插件配置（§9），不在 DSL 里。
 
 ## 5. ingress 命令与 omp 扩展
 
@@ -436,13 +444,13 @@ alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <i
 ## 7. 调度：会话状态机
 
 - **新开会话**：AI 指令、路由或 agent（§6.1）的 `start` / `github` 动作 → 持 Store 锁：按 `(chat_key, platform_message_id)` 去重（平台重投、CLI 重试不重复建会话）→ `one_per_chat` 场景本群已有未结束会话则不新建，把文本发给它（结果 `sent` / `busy`）→ 否则分配本群下一个会话号 `%n`，建会话（名称由场景 `title` 渲染，agent 开的记 `assigned_by`）→ 人开的会话设为本群当前会话，agent 开的不改 → 释放锁 → 派发 → 按结果键回话（`created` / `queued` / `failed`）；派发落到 `main_sync_failed` 时它的状态消息（带链接）就是回话，不再按 `failed` 回。
-- **派发**：非独占场景立即派发；独占场景在同场景已有未结束会话时保持 `queued`，前一个结束后按创建顺序派发。`repo` 场景派发时先 `mainsync align --repo <fixed_main>`（在 paseo 容器内 `git fetch` + fast-forward），非 ff / 脏 / 冲突 → `workspace_register(<fixed_main>)`（已登记则复用），workspace_id 记入该会话 → `main_sync_failed`（按 `share: true` 附链接，人手动清理）；成功则 `worktree_create(<fixed_main>, <base>, s<session_id>)`，记录 `workspace_id`、worktree 路径、`base_sha`。然后进入 `initial`。
+- **派发**：非独占场景立即派发，但没有在线名额时保持 `queued`（§4）；独占场景在同场景已有未结束会话时保持 `queued`，前一个结束后按创建顺序派发。`repo` 场景派发时先 `mainsync align --repo <fixed_main>`（在 paseo 容器内 `git fetch` + fast-forward），非 ff / 脏 / 冲突 → `workspace_register(<fixed_main>)`（已登记则复用），workspace_id 记入该会话 → `main_sync_failed`（按 `share: true` 附链接，人手动清理）；成功则 `worktree_create(<fixed_main>, <base>, s<session_id>)`，记录 `workspace_id`、worktree 路径、`base_sha`。已建好的工作区在名额重试时复用，不重复创建。然后进入 `initial`。
 - **进入 agent 状态**：在会话工作目录起 agent（`provider` 取场景，原样传给 `--provider`，如 `omp-alicedev/opencode-go/muse-spark-1.3-contributor`；`cwd` 场景用会话的 local workspace，`repo` 场景用会话 worktree，均带 `--workspace`），首轮 = `/chat_ingress` 包裹的状态 prompt；写 `agents(session_id, state)`。
 - **发到已有会话**（`send`）：目标会话 = 显式 `%n` > 被引用消息所属会话 > 本群当前会话。被引用消息所属会话按 `outbound` 查；AstrBot 主动发送拿不到平台消息 id 时，按被引用消息首行的会话标记 `%n` 解析 → 目标场景是 `audience: admin` 而发送者不是管理员则不回、记日志 → 必须处于对话态 → 注入该状态的 agent（§4 注入）→ 设为本群当前会话；否则按结果键回话。
 - **当前会话**：每群一个指针（`chat_current_sessions`）。人新开会话、`send` 到某会话、`/切换` 都会改它；agent 开的会话不改；当前会话结束时指针清空。
 - **推进**：agent 状态之间只由当前 agent 回复里的 `transition` 推进（§6）；AI 停下而未回复时由 §5.3 的提醒兜底。调度不读 agent 内容、不解析自由文本、不用 `wait`/`inspect` 判断阶段是否完成。human 状态由 `human` 动作推进。
 - **结束**：进入 terminal → 停掉并归档 agent → 有 worktree 则 `worktree_archive` → 释放独占并派发同场景下一个会话 → 若是本群当前会话则清空指针。会话号不复用。
-- **恢复**：会话与 agent 状态全部在 DuckDB。bot 重启或插件重载后，调度恢复未结束会话，不重起已存在的 agent；agent 在 paseo 里照常运行，回复在 bot 恢复后照常入队。bot 起不来时 paseo 仍在，人经 paseo 面板让 AI 修复。
+- **恢复**：会话与 agent 状态全部在 DuckDB。bot 重启或插件重载后，调度恢复未结束会话，不重起已存在的 agent；agent 在 paseo 里照常运行，回复在 bot 恢复后照常入队；等名额的 `queued` 会话由后台重试拾起。bot 起不来时 paseo 仍在，人经 paseo 面板让 AI 修复。
 
 单对话态场景（§13.1）只用到其中的新开会话、进入 agent 状态、发到已有会话、归档（或创建失败）结束。
 
@@ -473,7 +481,7 @@ alicedev run      --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <i
 
 ## 9. 指令与权限
 
-配置（`bot/_conf_schema.json`）：`allowed_chats: string[]`（chat_key 白名单；空 = 全部允许）、`admin_users: string[]`（user_key）、`internal_token`、`gateway_url`、`public_base_url`、`reports_root`、`github_token?`、`default_repo: TraderAlice/OpenAlice`。
+配置（`bot/_conf_schema.json`）：`allowed_chats: string[]`（chat_key 白名单；空 = 全部允许）、`admin_users: string[]`（user_key）、`internal_token`、`gateway_url`、`public_base_url`、`reports_root`、`github_token?`、`default_repo: TraderAlice/OpenAlice`、`max_live_agents: int`（在线 agent 上限，默认 4，§4）、`idle_park_seconds: int`（空闲停放阈值，默认 1800，§4）。
 
 这些配置由 AstrBot 持有（§11「服务配置归服务」）：`admin_users` 只在 AstrBot 里改（dashboard 的插件配置页，或改数据卷里的 `config/alicedev_config.json` 后重载插件），不来自部署环境变量，`deploy/.env` 里没有它。
 
@@ -592,7 +600,7 @@ README.md
 
 ### 13.1 单对话态场景
 
-一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲 12h 只关闭 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。`discussing` 的 `agent_commands` 为 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`：AI 在对话中发现值得单独跟进的需求可以开需求会话（先用 `需求列表` 查重），发现值得留存的消息可以收藏（先用 `/会话 %n` 取消息 id）。
+一个 agent 状态 `discussing`（带 `reply`，`next` 为空），无 `repo`，不独占；只由 `/归档` 进入 `archived` 结束（agent 创建失败时进入 `failed`），空闲超过 `idle_park_seconds` 只停放 agent、不结束会话。provider `omp-alicedev`；`cwd` 均为 `/workspace/openalice`。`discussing` 的 `agent_commands` 为 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`：AI 在对话中发现值得单独跟进的需求可以开需求会话（先用 `需求列表` 查重），发现值得留存的消息可以收藏（先用 `/会话 %n` 取消息 id）。
 
 | 场景 | 启动它的指令 | 名称 | reply 规格 | prompt 要点 |
 |---|---|---|---|---|

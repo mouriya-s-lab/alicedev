@@ -37,7 +37,12 @@ from alicedev.dsl.model import (
 )
 from alicedev.ids import new_agent_ref
 from alicedev.paseo import mainsync
-from alicedev.paseo.agent_actor import AgentStartFailed, AgentStarted, InjectOutcome
+from alicedev.paseo.agent_actor import (
+    AgentStartDeferred,
+    AgentStartFailed,
+    AgentStarted,
+    InjectOutcome,
+)
 from alicedev.paseo.control import PaseoError
 from alicedev.store.agents_repo import AgentRow, AgentRowStatus
 
@@ -54,10 +59,15 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("alicedev.scheduler")
 
+SLOTS_FULL = "在线会话已满，有空位后自动开始"
+TRANSITION_SLOT_WAIT_SECONDS = 60.0  # a state change of a running session may wait this long for a slot
+WAITER_INTERVAL_SECONDS = 10.0
+
 
 class StartOutcome(str, Enum):
     CREATED = "created"
     QUEUED = "queued"
+    WAITING = "waiting"  # no online slot free: stays queued until one is (§4 在线名额)
     FAILED = "failed"
     SENT = "sent"  # one_per_chat: the chat's open session got the text instead
     BUSY = "busy"  # one_per_chat: that session could not take it now
@@ -138,6 +148,7 @@ class Scheduler:
         self._registry = registry
         self._scenario_locks: dict[str, asyncio.Lock] = {}
         self._background: set[asyncio.Task] = set()
+        self._retry_lock = asyncio.Lock()
 
     # --- registry helpers -------------------------------------------------------
 
@@ -241,6 +252,8 @@ class Scheduler:
                 return StartResult(StartOutcome.QUEUED, row)
             ok, reason = await self._dispatch(row, notify=False, trigger_msg_ref=trigger_ref)
         current = await self._sessions.get(row.session_id)
+        if current is not None and current.state == QUEUED:
+            return StartResult(StartOutcome.WAITING, current, SLOTS_FULL)
         if ok:
             return StartResult(StartOutcome.CREATED, current)
         if current is not None and current.state == MAIN_SYNC_FAILED:
@@ -289,8 +302,10 @@ class Scheduler:
         if scenario is None:
             await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason="场景已不存在")
             return False, "场景已不存在"
+        if not await self._actor.has_room():
+            return False, SLOTS_FULL  # stays queued; retry_waiting picks it up (§4 在线名额)
         match scenario.workdir:
-            case CwdWorkdir(path=path):
+            case CwdWorkdir(path=path) if row.workspace_id is None:
                 try:
                     ws = await self._paseo.workspace_local(path, row.name)
                 except PaseoError as exc:
@@ -298,7 +313,9 @@ class Scheduler:
                     await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason=reason)
                     return False, reason
                 await self._sessions.set_workspace(row.session_id, workspace_id=ws.workspace_id)
-            case RepoWorkdir(fixed_main=fixed_main, base=base):
+            case RepoWorkdir(fixed_main=fixed_main, base=base) if (
+                row.workspace_id is None or row.worktree_path is None
+            ):
                 result = await mainsync.align(self._paseo, fixed_main)
                 match result:
                     case mainsync.SyncFailed(reason=reason):
@@ -326,6 +343,8 @@ class Scheduler:
                             row.session_id, workspace_id=ws.workspace_id,
                             worktree_path=ws.cwd, base_sha=sha,
                         )
+            case _:
+                pass  # workspace (and worktree) already exist from an earlier, deferred attempt
         fresh = await self._sessions.get(row.session_id)
         assert fresh is not None
         ok, reason = await self._enter(fresh, scenario.initial, by=EnteredBy.SYSTEM, notify=notify,
@@ -388,11 +407,22 @@ class Scheduler:
                 assert scenario is not None
                 if by is EnteredBy.HUMAN:  # the state text is the human command's reply
                     await self._state_notice(row, reason, share=False)
-                ok, why = await self._start_agent(row, scenario, state, trigger_msg_ref)
-                if not ok:
-                    await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason=why)
-                    return False, why
-                return True, ""
+                wait = 0.0 if prev == QUEUED else TRANSITION_SLOT_WAIT_SECONDS
+                started = await self._start_agent(row, scenario, state, trigger_msg_ref, wait_seconds=wait)
+                match started:
+                    case AgentStarted():
+                        return True, ""
+                    case AgentStartDeferred() if prev == QUEUED:
+                        # A new session waits for a slot; it goes back to the queue (§4).
+                        await self._sessions.set_state(row.session_id, QUEUED)
+                        return False, SLOTS_FULL
+                    case AgentStartDeferred():
+                        why = "在线会话已满，等不到名额"
+                        await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason=why)
+                        return False, why
+                    case AgentStartFailed(reason=why):
+                        await self._enter(row, FAILED, by=EnteredBy.SYSTEM, notify=notify, reason=why)
+                        return False, why
             case HumanState():
                 # An AI-entered state's message is the AI reply (share link
                 # appended by the §6 intake); otherwise post the state text.
@@ -414,9 +444,11 @@ class Scheduler:
         scenario: Scenario,
         state: AgentState,
         trigger_msg_ref: str | None,
-    ) -> tuple[bool, str]:
+        *,
+        wait_seconds: float,
+    ) -> AgentStarted | AgentStartFailed | AgentStartDeferred:
         if row.workspace_id is None:
-            return False, "会话没有工作区"
+            return AgentStartFailed("会话没有工作区")
         match scenario.workdir:
             case CwdWorkdir(path=path):
                 cwd = path
@@ -438,18 +470,18 @@ class Scheduler:
             )
         except Exception as exc:  # noqa: BLE001 - render errors are reported, not raised
             _LOG.exception("prompt render failed for %s/%s", scenario.name, state.name)
-            return False, f"prompt 渲染失败：{exc}"
+            return AgentStartFailed(f"prompt 渲染失败：{exc}")
         outcome = await self._actor.start(
             agent_ref=agent_ref, session_id=row.session_id, chat_key=row.chat_key,
             state=state.name, provider=scenario.provider, cwd=cwd,
             workspace_id=row.workspace_id, title=row.name, prompt=prompt,
-            trigger_msg_ref=trigger_msg_ref, sender_key=row.created_by,
+            trigger_msg_ref=trigger_msg_ref, sender_key=row.created_by, wait_seconds=wait_seconds,
         )
         match outcome:
-            case AgentStarted():
-                return True, ""
             case AgentStartFailed(reason=why):
-                return False, f"启动 agent 失败：{why}"
+                return AgentStartFailed(f"启动 agent 失败：{why}")
+            case _:
+                return outcome
 
     def prompt_vars(
         self, row: "SessionRow", scenario: Scenario, state: AgentState, agent_ref: str
@@ -487,9 +519,7 @@ class Scheduler:
             except PaseoError:
                 _LOG.warning("worktree archive failed for session %s", row.session_id, exc_info=True)
         await self._sessions.clear_current_if(row.chat_key, row.session_id)
-        scenario = self.scenario(row.scenario)
-        if scenario is not None and scenario.exclusive:
-            self._spawn(self._guard(self._dispatch_next(scenario)))
+        self._spawn(self._guard(self.retry_waiting()))
 
     async def _dispatch_next(self, scenario: Scenario) -> None:
         async with self._lock(scenario.name):
@@ -501,6 +531,36 @@ class Scheduler:
             if await self._exclusive_busy(scenario, head.session_id):
                 return
             await self._dispatch(head, notify=True)
+
+    async def retry_waiting(self) -> None:
+        """Dispatch queued sessions oldest first until one cannot get a slot (§4 在线名额)."""
+        async with self._retry_lock:
+            for row in await self._sessions.in_states((QUEUED,)):
+                scenario = self.scenario(row.scenario)
+                if scenario is None:
+                    continue
+                if scenario.exclusive and await self._exclusive_busy(scenario, row.session_id):
+                    continue
+                async with self._lock(scenario.name):
+                    fresh = await self._sessions.get(row.session_id)
+                    if fresh is None or fresh.state != QUEUED:
+                        continue
+                    await self._dispatch(fresh, notify=True)
+                after = await self._sessions.get(row.session_id)
+                if after is not None and after.state == QUEUED:
+                    return  # no slot: keep first come, first served
+
+    def start_background(self) -> None:
+        """Poll for freed slots so queued sessions start without waiting for a trigger."""
+        self._spawn(self._guard(self._waiter_loop()))
+
+    async def _waiter_loop(self) -> None:
+        while True:
+            await asyncio.sleep(WAITER_INTERVAL_SECONDS)
+            try:
+                await self.retry_waiting()
+            except Exception:  # noqa: BLE001 - the waiter must survive one bad pass
+                _LOG.exception("slot waiter pass failed")
 
     # --- human-driven changes ----------------------------------------------------------
 
@@ -562,6 +622,8 @@ class Scheduler:
                 return "duplicate"
             case InjectOutcome.BUSY:
                 return "busy"
+            case InjectOutcome.FULL:
+                return "full"
             case InjectOutcome.FAILED:
                 return "not_conversational"
 
@@ -646,6 +708,7 @@ class Scheduler:
         for scenario in self._registry().scenarios.values():
             if scenario.exclusive:
                 await self._dispatch_next(scenario)
+        await self.retry_waiting()
 
     def visible(self, scenario: Scenario, state_name: str) -> bool:
         try:

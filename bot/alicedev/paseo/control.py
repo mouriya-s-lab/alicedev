@@ -33,6 +33,14 @@ class AgentHandle:
     server_id: str | None
 
 
+
+@dataclass(frozen=True)
+class LiveAgent:
+    """An agent that holds a resident runtime in paseo (``paseo ls``, not closed)."""
+
+    agent_id: str
+    status: AgentStatus
+
 @dataclass(frozen=True)
 class WorkspaceRef:
     workspace_id: str
@@ -81,8 +89,12 @@ class PaseoControl(abc.ABC):
     async def status(self, agent_id: str) -> AgentStatus: ...
 
     @abc.abstractmethod
-    async def close(self, agent_id: str) -> None:
-        """Stop the runtime; the agent stays resumable."""
+    async def live_agents(self) -> list[LiveAgent]:
+        """Agents holding a resident runtime right now; raises ``PaseoError`` if unknown."""
+
+    @abc.abstractmethod
+    async def park(self, agent_id: str) -> None:
+        """Release the idle agent's runtime; a later ``send`` wakes it with its conversation."""
 
     @abc.abstractmethod
     async def archive(self, agent_id: str) -> None: ...
