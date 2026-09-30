@@ -510,7 +510,7 @@ AI 指令：
 | 状态 | `/状态` | `status` | admin |
 | alicedev | `/alicedev [指令名]` | `help` | all |
 
-`share` 动作：每个被 @ 的用户一个 token（`user_key` 记入 `tokens_issued`），无 @ 给发起人；逐条 `[At, Plain(url)]`。`favorite` 动作：原作者、文本、图片落盘 `data/plugin_data/alicedev/images/`、收藏人；agent 收藏时收藏人是会话创建者，原作者是被引用消息的群友或会话（「%n 名称」）。`list` 每页 10 条，页脚 `第 x/y 页 · /<指令> n`。
+`share` 动作：每个被 @ 的用户一个 token（`user_key` 记入 `tokens_issued`），无 @ 给发起人；群聊里逐条 `[At, Plain(url)]`，私聊里只发 `Plain(url)`（QQ 不允许私聊带 `at` 元素，出队时按 `chat_key` 的消息类型 `FriendMessage` 判定，§6）。`favorite` 动作：原作者、文本、图片落盘 `data/plugin_data/alicedev/images/`、收藏人；agent 收藏时收藏人是会话创建者，原作者是被引用消息的群友或会话（「%n 名称」）。`list` 每页 10 条，页脚 `第 x/y 页 · /<指令> n`。
 
 **agent 可以调用的指令**（各场景状态的 `agent_commands`）：`requirement`、`investigate`、`github-issue`、`github-pr` 的对话态可用 `需求`、`需求列表`、`收藏`、`收藏夹`、`会话`（收藏要的消息 id 只能从 `/会话 %n` 的 `recent` 取）；`steward` 见 §13.3。`upgrade-bot` 不开放。
 

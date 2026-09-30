@@ -10,7 +10,8 @@ Payloads are tagged dicts stored in ``outbox.payload``:
   return no platform message id).
 * ``{"type": "text", "text": str}``
 * ``{"type": "card", "card": str, "fields": {...}, "caption": str|null}``
-* ``{"type": "at_text", "platform_id": str, "name": str, "text": str}``
+* ``{"type": "at_text", "platform_id": str, "name": str, "text": str}`` — an @ mention
+  plus text; in a private chat (QQ rejects ``at`` there) only the text is sent.
 """
 
 from __future__ import annotations
@@ -35,18 +36,26 @@ class RenderError(RuntimeError):
     """A payload could not be rendered (never retried as-is)."""
 
 
+def is_private_chat(chat_key: str) -> bool:
+    """AstrBot's ``unified_msg_origin`` is ``<platform>:<MessageType>:<session>``; ``FriendMessage`` is private."""
+    parts = chat_key.split(":", 2)
+    return len(parts) == 3 and parts[1] == "FriendMessage"
+
+
 class OutboxRenderer:
     def __init__(self, *, config: "PluginConfig", cards: "CardRenderer | None") -> None:
         self._config = config
         self._cards = cards
 
-    async def render(self, payload: Mapping[str, Any]) -> list[Any]:
+    async def render(self, payload: Mapping[str, Any], *, private: bool = False) -> list[Any]:
         from astrbot.api.message_components import At, File, Image, Plain  # astrbot-only
 
         match payload.get("type"):
             case "text":
                 return [Plain(str(payload["text"]))]
             case "at_text":
+                if private:  # nobody to mention in a one-to-one chat, and QQ refuses `at` there
+                    return [Plain(str(payload["text"]).lstrip())]
                 return [At(qq=str(payload["platform_id"]), name=str(payload.get("name") or "")),
                         Plain(str(payload["text"]))]
             case "card":
