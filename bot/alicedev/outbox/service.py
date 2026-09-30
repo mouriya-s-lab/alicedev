@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, Mapping, Protocol, Sequence
 
-from alicedev.outbox.render import RenderError
+from alicedev.outbox.render import RenderError, is_private_chat
 from alicedev.store.outbox_repo import OutboxRepo, OutboxState
 
 if TYPE_CHECKING:
@@ -133,7 +133,7 @@ class Outbox:
         sent = 0
         for row in await self._repo.due_heads():
             try:
-                components = await self._renderer.render(row.payload)
+                components = await self._renderer.render(row.payload, private=is_private_chat(row.chat_key))
             except RenderError as exc:
                 _LOG.error("outbox %s unrenderable: %s", row.reply_id, exc)
                 await self._fail_forever(row.reply_id, str(exc))

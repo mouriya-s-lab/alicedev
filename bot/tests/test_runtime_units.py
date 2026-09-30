@@ -9,6 +9,7 @@ import pytest
 from rt_support import CHAT, GIT_NO_MARKERS, FakePaseo, GitResult, install_fake_astrbot, make_env
 
 from alicedev.actions.inbound import QuotedMessage, exact_github_url
+from alicedev.outbox.render import is_private_chat
 from alicedev.paseo import cli_json, mainsync
 from alicedev.paseo.cli import CliPaseoControl
 from alicedev.paseo.control import AgentStatus, PaseoError
@@ -195,6 +196,10 @@ def test_outbox_render_ai_kinds(tmp_path: Path) -> None:
         assert out[0].text == f"{marker}\nhttps://dev.example/r/r.md"
         out = await r.render({"type": "at_text", "platform_id": "5", "name": "小明", "text": " url"})
         assert (out[0].qq, out[1].text) == ("5", " url")
+        out = await r.render({"type": "at_text", "platform_id": "5", "name": "小明", "text": " url"}, private=True)
+        assert [type(c).__name__ for c in out] == ["Plain"] and out[0].text == "url"
+        assert is_private_chat("qq:FriendMessage:5") and not is_private_chat("qq:GroupMessage:9")
+        assert not is_private_chat("telegram:GroupMessage:-100") and not is_private_chat("garbage")
         await env.close()
 
     asyncio.run(main())
