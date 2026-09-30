@@ -299,7 +299,7 @@ stateDiagram-v2
 ```
 
 - 创建：先取得在线名额（见下）→ 写 `agents(creating)` → `create`（首轮 prompt 以 ingress 命令注入，omp 扩展在模型前拦截，msg id 不入模型上下文）→ 响应丢失时 `find_by_label`（label `alicedev=agent_ref`）找回 → 写 `agent_id` → 转 `active`。取不到名额则不创建、不写 `agents` 行。`create` 与 `find_by_label` 都失败 → 会话进入内建 `failed`（附原因）。
-- 注入：持锁 → `status`；`running/permission` 则每 2s 轮询直到 idle（上限 10 min，超时为 `send` 的 `busy` 结果）；`status` 为 `closed`（已停放或已被归档）则先取得在线名额，取不到同样得 `busy` → `send` → 写 `messages` → 更新 `last_activity_at`。同一 agent 严格串行；不同 agent 并行。
+- 注入：持锁 → `status`；`running/permission` 则每 2s 轮询直到 idle（上限 10 min，超时为 `send` 的 `busy` 结果）；`status` 为 `closed`（已停放或已被归档）则先取得在线名额，取不到得 `full` → `send` → 写 `messages` → 更新 `last_activity_at`。同一 agent 严格串行；不同 agent 并行。
 - 停放：sweeper 每 10 min 扫对话态 agent 中 `status=active AND last_activity_at < now-idle_park_seconds`（默认 30 min）的；持锁 → `status` 非 running/permission → `park` → `status=closed`。幂等，会话状态不变，下次注入时唤醒。时钟只有一个：`agents.last_activity_at`（注入时间与入队时间的较大者），随 DuckDB 持久化。
 - 会话离开某状态或结束时，该状态的 agent `archive`。
 
@@ -307,7 +307,7 @@ stateDiagram-v2
 
 - **受限对象**是 paseo 里常驻 runtime 的 agent（`live_agents()`：`paseo ls` 中未归档且状态非 `closed` 的），不是会话，也不是 `agents` 表的行；数据源是 paseo，DuckDB 里的状态只用来挑选驱逐对象。
 - **取名额**：`create` 与向 `closed` agent 的注入都要先经插件进程内唯一的 `SlotPool`（插件是唯一调度写者；一把 asyncio 锁串行发放，名额持有到 `create`/`send` 返回）。持锁后：`live_agents()`（`paseo ls` 失败一律视为满员，不放行）→ 在线数低于上限则放行；否则从在线 agent 里挑本 bot 认识的、`idle`、`last_activity_at` 最早的（不含请求者自己，且其 agent 租约当前未被占用）逐个 `park`，直到低于上限；挑不出可停放的（都在 `running/permission`，或不是本 bot 的 agent）则不放行。paseo 已在线超过上限时同样先停放到低于上限。
-- **未放行**：新会话保持内建 `queued`（不创建 agent；派发前就检查有没有名额，已经建好的工作区留着复用），后台每 10 s 按创建顺序重试、会话结束时立即重试，先来的先派发；新会话进来时若已有更早的会话在等名额，即使此刻有空名额也排在它们后面（由重试按顺序派发）；向已停放会话注入得到 `busy`。由 AI 转移触发的下一状态 agent（如 `upgrade-bot`）在上一状态 agent 归档后取名额，最多等 60 s，仍取不到则会话进入 `failed`。
+- **未放行**：新会话保持内建 `queued`（不创建 agent；派发前就检查有没有名额，已经建好的工作区留着复用），后台每 10 s 按创建顺序重试、会话结束时立即重试，先来的先派发。初次派发与后台重试共用调度的派发临界区（先调度、再场景），直到 agent 准入结果返回才结束；新会话若已有更早的会话在等名额，即使此刻有空名额也排在它们后面。重启恢复也只经这条全局队列派发，独占场景仍按其排他条件跳过，不另开抢先路径。向已停放会话注入得到 `full`。由 AI 转移触发的下一状态 agent（如 `upgrade-bot`）在上一状态 agent 归档后取名额，最多等 60 s，仍取不到则会话进入 `failed`。
 - 名额数与停放阈值是插件配置（§9），不在 DSL 里。
 
 ## 5. ingress 命令与 omp 扩展

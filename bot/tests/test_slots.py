@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from rt_support import CHAT, make_env, inbound
+from rt_support import ADMIN, CHAT, make_env, inbound
 
 from alicedev.paseo.control import AgentStatus
 
@@ -74,6 +74,205 @@ def test_new_session_queues_behind_older_waiters_even_when_a_slot_is_free(tmp_pa
         await env.close()
 
     run(main())
+
+
+def test_recover_admits_older_waiter_before_newer_exclusive_scenario(tmp_path: Path) -> None:
+    async def main() -> None:
+        env = await make_env(tmp_path)
+        try:
+            env.paseo.create_status = AgentStatus.RUNNING
+            await _sessions(env, CAP + 1, prefix="recover")
+            await env.dispatcher.handle(inbound(
+                "/升级bot newer", user=ADMIN, message_id="recover-upgrade",
+            ))
+            await env.drain()
+            older = await env.sessions.by_no(CHAT, CAP + 1)
+            newer = await env.sessions.by_no(CHAT, CAP + 2)
+            assert older is not None and newer is not None
+            assert older.scenario == "investigate" and newer.scenario == "upgrade-bot"
+            assert older.state == newer.state == "queued"
+            assert len(env.paseo.created) == CAP and _live(env) == CAP
+
+            # Recovery sees a persisted cross-scenario queue and exactly one free runtime.
+            await env.scheduler.stop()
+            env.paseo.statuses[env.paseo.created[0]["agent_id"]] = AgentStatus.CLOSED
+            await env.scheduler.recover()
+            await env.drain()
+
+            admitted = await env.agents.get(env.paseo.created[-1]["agent_ref"])
+            assert admitted is not None and admitted.session_id == older.session_id
+            assert admitted.agent_id == env.paseo.created[-1]["agent_id"]
+            assert admitted.status.value == "active"
+            assert (await env.sessions.get(older.session_id)).state == "discussing"
+            assert (await env.sessions.get(newer.session_id)).state == "queued"
+            assert await env.agents.unarchived(newer.session_id) == []
+            assert len(env.paseo.created) == CAP + 1 and _live(env) == CAP
+        finally:
+            await env.close()
+
+    run(main())
+
+
+def test_cross_scenario_start_cannot_overtake_waiter_admission_in_flight(tmp_path: Path) -> None:
+    async def main() -> None:
+        env = await make_env(tmp_path)
+        older_paused = asyncio.Event()
+        release_older = asyncio.Event()
+        contender_observed = asyncio.Event()
+        tasks: list[asyncio.Task] = []
+        newcomer: asyncio.Task | None = None
+        original_unarchived = env.agents.unarchived
+        try:
+            env.paseo.create_status = AgentStatus.RUNNING
+            await _sessions(env, CAP + 1, prefix="race")
+            await env.scheduler.stop()
+            older = await env.sessions.by_no(CHAT, CAP + 1)
+            assert older is not None and older.state == "queued"
+            assert len(env.paseo.created) == CAP and _live(env) == CAP
+            env.paseo.statuses[env.paseo.created[0]["agent_id"]] = AgentStatus.CLOSED
+
+            async def paused_unarchived(session_id: int):
+                agents = await original_unarchived(session_id)
+                if session_id == older.session_id:
+                    # Real Store query: the waiter has left queued, but has no agent yet.
+                    older_paused.set()
+                    await release_older.wait()
+                elif asyncio.current_task() is newcomer:
+                    # Without shared admission serialization the newcomer gets this far.
+                    contender_observed.set()
+                return agents
+
+            class ObservedDispatchLock(asyncio.Lock):
+                async def acquire(self) -> bool:
+                    if asyncio.current_task() is newcomer:
+                        # Rendezvous even when correct serialization blocks the newcomer.
+                        contender_observed.set()
+                    return await super().acquire()
+
+            env.agents.unarchived = paused_unarchived
+            env.scheduler._dispatch_lock = ObservedDispatchLock()
+            retry = asyncio.create_task(env.scheduler.retry_waiting())
+            tasks.append(retry)
+            await older_paused.wait()
+            assert (await env.sessions.get(older.session_id)).state == "discussing"
+            assert await original_unarchived(older.session_id) == []
+            assert _live(env) == CAP - 1
+
+            newcomer = asyncio.create_task(env.dispatcher.handle(inbound(
+                "/升级bot contender", user=ADMIN, message_id="race-upgrade",
+            )))
+            tasks.append(newcomer)
+            await contender_observed.wait()
+            newer = await env.sessions.by_no(CHAT, CAP + 2)
+            assert newer is not None and newer.scenario == "upgrade-bot"
+            # Assert persisted behavior, not whether either synchronization hook was called.
+            assert newer.state == "queued"
+            assert await original_unarchived(newer.session_id) == []
+
+            release_older.set()
+            await asyncio.gather(*tasks)
+            await env.drain()
+            admitted = await env.agents.get(env.paseo.created[-1]["agent_ref"])
+            assert admitted is not None and admitted.session_id == older.session_id
+            assert admitted.agent_id == env.paseo.created[-1]["agent_id"]
+            assert admitted.status.value == "active"
+            assert (await env.sessions.get(older.session_id)).state == "discussing"
+            assert (await env.sessions.get(newer.session_id)).state == "queued"
+            assert await original_unarchived(newer.session_id) == []
+            assert len(env.paseo.created) == CAP + 1 and _live(env) == CAP
+        finally:
+            release_older.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            env.agents.unarchived = original_unarchived
+            await env.close()
+
+    run(asyncio.wait_for(main(), timeout=10))
+
+
+def test_retry_admitted_new_request_is_not_dispatched_again_by_its_caller(tmp_path: Path) -> None:
+    async def main() -> None:
+        env = await make_env(tmp_path)
+        first_paused = asyncio.Event()
+        release_first = asyncio.Event()
+        retry_waiting = asyncio.Event()
+        newcomer_waiting = asyncio.Event()
+        tasks: list[asyncio.Task] = []
+        first: asyncio.Task | None = None
+        retry: asyncio.Task | None = None
+        newcomer: asyncio.Task | None = None
+        original_unarchived = env.agents.unarchived
+        try:
+            env.paseo.create_status = AgentStatus.RUNNING
+
+            async def paused_unarchived(session_id: int):
+                agents = await original_unarchived(session_id)
+                if asyncio.current_task() is first:
+                    first_paused.set()
+                    await release_first.wait()
+                return agents
+
+            class ObservedDispatchLock(asyncio.Lock):
+                async def acquire(self) -> bool:
+                    if asyncio.current_task() is retry:
+                        retry_waiting.set()
+                    elif asyncio.current_task() is newcomer:
+                        newcomer_waiting.set()
+                    return await super().acquire()
+
+            env.agents.unarchived = paused_unarchived
+            env.scheduler._dispatch_lock = ObservedDispatchLock()
+            first = asyncio.create_task(env.dispatcher.handle(inbound(
+                "/帮我调查 first", message_id="stale-first",
+            )))
+            tasks.append(first)
+            await first_paused.wait()
+            older = await env.sessions.by_no(CHAT, 1)
+            assert older is not None and older.state == "discussing"
+            assert await original_unarchived(older.session_id) == []
+
+            # Queue the retry before the second caller, while admission 1 owns the lock.
+            retry = asyncio.create_task(env.scheduler.retry_waiting())
+            tasks.append(retry)
+            await retry_waiting.wait()
+            newcomer = asyncio.create_task(env.dispatcher.handle(inbound(
+                "/升级bot second", user=ADMIN, message_id="stale-second",
+            )))
+            tasks.append(newcomer)
+            await newcomer_waiting.wait()
+            newer = await env.sessions.by_no(CHAT, 2)
+            assert newer is not None and newer.scenario == "upgrade-bot"
+            assert newer.state == "queued"
+            assert env.paseo.created == []
+
+            # Retry acquires next and admits session 2 before its original caller resumes.
+            release_first.set()
+            await asyncio.gather(*tasks)
+            await env.drain()
+            admitted = [
+                await env.agents.get(created["agent_ref"]) for created in env.paseo.created
+            ]
+            assert [agent.session_id for agent in admitted] == [older.session_id, newer.session_id]
+            current = await original_unarchived(newer.session_id)
+            assert len(current) == 1
+            assert current[0].agent_id == env.paseo.created[1]["agent_id"]
+            assert current[0].status.value == "active"
+            assert (await env.sessions.get(older.session_id)).state == "discussing"
+            assert (await env.sessions.get(newer.session_id)).state == "working"
+            assert _live(env) == 2
+            assert _live(env) <= CAP
+        finally:
+            release_first.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            env.agents.unarchived = original_unarchived
+            await env.close()
+
+    run(asyncio.wait_for(main(), timeout=10))
 
 
 def test_full_pool_parks_the_least_recently_active_idle_agent(tmp_path: Path) -> None:

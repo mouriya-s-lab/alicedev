@@ -148,7 +148,7 @@ class Scheduler:
         self._registry = registry
         self._scenario_locks: dict[str, asyncio.Lock] = {}
         self._background: set[asyncio.Task] = set()
-        self._retry_lock = asyncio.Lock()
+        self._dispatch_lock = asyncio.Lock()
 
     # --- registry helpers -------------------------------------------------------
 
@@ -247,14 +247,20 @@ class Scheduler:
 
         if open_one is not None:
             return await self._start_into_open(open_one, req, text)
-        async with self._lock(scenario.name):
-            if scenario.exclusive and await self._exclusive_busy(scenario, row.session_id):
-                return StartResult(StartOutcome.QUEUED, row)
-            if await self._slot_waiters_before(row.session_id):
-                # First come, first served: older sessions are still waiting for a slot.
-                self._spawn(self._guard(self.retry_waiting()))
-                return StartResult(StartOutcome.WAITING, row, SLOTS_FULL)
-            ok, reason = await self._dispatch(row, notify=False, trigger_msg_ref=trigger_ref)
+        async with self._dispatch_lock, self._lock(scenario.name):
+            fresh = await self._sessions.get(row.session_id)
+            assert fresh is not None  # session records are never deleted
+            if fresh.state == QUEUED:
+                if scenario.exclusive and await self._exclusive_busy(scenario, fresh.session_id):
+                    return StartResult(StartOutcome.QUEUED, fresh)
+                if await self._slot_waiters_before(fresh.session_id):
+                    # Older queued sessions have priority over this new request.
+                    self._spawn(self._guard(self.retry_waiting()))
+                    return StartResult(StartOutcome.WAITING, fresh, SLOTS_FULL)
+                ok, reason = await self._dispatch(fresh, notify=False, trigger_msg_ref=trigger_ref)
+            else:
+                # A retry may have dispatched it while this caller waited for the owner.
+                ok, reason = not self.is_ended(fresh), ""
         current = await self._sessions.get(row.session_id)
         if current is not None and current.state == QUEUED:
             return StartResult(StartOutcome.WAITING, current, SLOTS_FULL)
@@ -538,20 +544,9 @@ class Scheduler:
         await self._sessions.clear_current_if(row.chat_key, row.session_id)
         self._spawn(self._guard(self.retry_waiting()))
 
-    async def _dispatch_next(self, scenario: Scenario) -> None:
-        async with self._lock(scenario.name):
-            queued = [r for r in await self._sessions.in_states((QUEUED,))
-                      if r.scenario == scenario.name]
-            if not queued:
-                return
-            head = queued[0]
-            if await self._exclusive_busy(scenario, head.session_id):
-                return
-            await self._dispatch(head, notify=True)
-
     async def retry_waiting(self) -> None:
         """Dispatch queued sessions oldest first until one cannot get a slot (§4 在线名额)."""
-        async with self._retry_lock:
+        async with self._dispatch_lock:
             for row in await self._sessions.in_states((QUEUED,)):
                 scenario = self.scenario(row.scenario)
                 if scenario is None:
@@ -722,9 +717,6 @@ class Scheduler:
     async def recover(self) -> None:
         for agent in await self._agents.by_status(AgentRowStatus.CREATING):
             await self._actor.recover_creating(agent)
-        for scenario in self._registry().scenarios.values():
-            if scenario.exclusive:
-                await self._dispatch_next(scenario)
         await self.retry_waiting()
 
     def visible(self, scenario: Scenario, state_name: str) -> bool:
