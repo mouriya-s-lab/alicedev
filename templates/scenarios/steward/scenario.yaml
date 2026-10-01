@@ -17,16 +17,17 @@ states:
       image_templates: [generic_card]
       stickers: []
       max_text_chars: 600
-    agent_commands:
-      - 帮我调查
-      - 解读
-      - 需求
-      - 需求列表
-      - 收藏
-      - 收藏夹
-      - 会话列表
-      - 会话列表 全部
-      - 会话
-      - 归档
-      - 群列表
-      - 状态
+    tools:
+      - session_get
+      - session_list
+      - chats_list
+      - status_get
+      - requirements_list
+      - favorites_list
+      - requirement_add
+      - favorite_add
+      - investigation_start
+      - github_analysis_start
+      - session_archive
+      - session_rename
+      - session_link_deliver

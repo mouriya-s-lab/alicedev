@@ -1,6 +1,6 @@
--- alicedev DuckDB schema v3 (ARCHITECTURE §10). The plugin process is the
--- single writer; all changes go through Store's asyncio.Lock. A v2 database is
--- migrated once by Store.open() (legacy tables are renamed to v2_* first).
+-- alicedev structural schema (ARCHITECTURE §10), single AstrBot writer.
+-- Store.open applies structural changes; the pre-admission v5 cutover confirms
+-- old runtime retirement and migrates requirement facts before recording v5.
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version     INTEGER NOT NULL,
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE SEQUENCE IF NOT EXISTS seq_sessions START 1;
 CREATE SEQUENCE IF NOT EXISTS seq_favorites START 1;
 CREATE SEQUENCE IF NOT EXISTS seq_outbox START 1;
+CREATE SEQUENCE IF NOT EXISTS seq_requirements START 1;
 
 -- User-visible sessions; `no` is the per-chat number shown as %n.
 CREATE TABLE IF NOT EXISTS sessions (
@@ -112,6 +113,22 @@ CREATE TABLE IF NOT EXISTS favorites (
     images               JSON,
     platform_message_id  TEXT,
     created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+);
+
+-- Original requirements, not AI sessions or saved exchanges.
+CREATE TABLE IF NOT EXISTS requirements (
+    id                   BIGINT PRIMARY KEY,
+    chat_key             TEXT NOT NULL,
+    author_key           TEXT NOT NULL,
+    author_name          TEXT NOT NULL,
+    text                 TEXT NOT NULL,
+    images               JSON,
+    quoted               JSON,
+    status               TEXT NOT NULL DEFAULT 'open',
+    source_kind          TEXT NOT NULL,
+    source_ref           TEXT NOT NULL,
+    created_at           TIMESTAMP NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+    UNIQUE (chat_key, source_kind, source_ref)
 );
 
 CREATE TABLE IF NOT EXISTS reports (

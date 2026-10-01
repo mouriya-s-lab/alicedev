@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -13,8 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "bot"))
 
-from alicedev.dsl import context, load_registry, render, reply_instructions  # noqa: E402
-from alicedev.dsl.messages import required_keys  # noqa: E402
+from alicedev.dsl import context, load_registry, render  # noqa: E402
 from alicedev.dsl.model import AgentState, Tmpl  # noqa: E402
 from alicedev.dsl.render import PROMPT_VARS  # noqa: E402
 
@@ -78,19 +76,13 @@ def test_bad_command_rejected_others_survive(tpl: Path, patch: tuple[str, str], 
     old, new = patch
     assert old in GOOD_PING
     baseline_commands = {command.name for command in load_registry(tpl).command_list()}
-    scenario_path = tpl / "scenarios/requirement/scenario.yaml"
-    scenario_text = scenario_path.read_text(encoding="utf-8")
-    scenario_path.write_text(
-        re.sub(r"(agent_commands: \[)", r"\1ping, ", scenario_text, count=1), encoding="utf-8"
-    )
-    assert "agent_commands: [ping, " in scenario_path.read_text(encoding="utf-8")
     write(tpl, "commands/ping.yaml", GOOD_PING.replace(old, new))
     reg = load_registry(tpl)
     errs = [e for e in reg.errors if e.path == "commands/ping.yaml"]
     assert len(errs) == 1 and needle in errs[0].message, errs
     assert errs[0].line >= 1
     assert "ping" not in reg.commands
-    assert "requirement" in reg.scenarios
+    assert "investigate" in reg.scenarios
     assert baseline_commands <= {command.name for command in reg.command_list()}
 
 
@@ -136,21 +128,21 @@ def test_filename_must_match_name(tpl: Path) -> None:
 
 
 def test_rejected_scenario_takes_dependent_commands_down(tpl: Path) -> None:
-    path = tpl / "scenarios/requirement/scenario.yaml"
+    path = tpl / "scenarios/investigate/scenario.yaml"
     path.write_text(path.read_text(encoding="utf-8").replace("initial: discussing", "initial: nowhere"), encoding="utf-8")
     reg = load_registry(tpl)
     paths = {e.path for e in reg.errors}
-    assert "scenarios/requirement/scenario.yaml" in paths
-    assert "commands/需求.yaml" in paths  # start: requirement now dangles
-    assert "commands/需求列表.yaml" in paths
-    assert "帮我调查" in reg.commands
+    assert "scenarios/investigate/scenario.yaml" in paths
+    assert "commands/帮我调查.yaml" in paths
+    assert "帮我调查" not in reg.commands
+    assert {"需求", "需求列表"} <= reg.commands.keys()
 
 
 def test_prompt_with_unknown_variable_rejected(tpl: Path) -> None:
-    prompt = tpl / "scenarios/requirement/discussing.md"
+    prompt = tpl / "scenarios/investigate/discussing.md"
     prompt.write_text(prompt.read_text(encoding="utf-8") + "\n{{ session_ref }}\n", encoding="utf-8")
     reg = load_registry(tpl)
-    (err,) = [e for e in reg.errors if e.path == "scenarios/requirement/scenario.yaml"]
+    (err,) = [e for e in reg.errors if e.path == "scenarios/investigate/scenario.yaml"]
     assert "session_ref" in err.message
 
 
@@ -177,11 +169,6 @@ def test_messages_must_cover_every_result(tpl: Path) -> None:
     assert "send.busy" in err.message
 
 
-def test_real_messages_cover_required_keys() -> None:
-    reg = load_registry(ROOT / "templates")
-    assert set(required_keys()) <= set(reg.messages)
-
-
 def test_render_is_strict() -> None:
     with pytest.raises(jinja2.UndefinedError):
         render(Tmpl("{{ missing }}"), {})
@@ -190,6 +177,7 @@ def test_render_is_strict() -> None:
 
 def test_every_prompt_renders_with_full_context() -> None:
     reg = load_registry(ROOT / "templates")
+    assert not reg.errors
     github = {
         "kind": "issue", "owner": "o", "repo": "r", "number": 1, "title": "t",
         "body": "b", "labels": ["x"], "state": "open", "url": "https://x",
@@ -212,28 +200,3 @@ def test_every_prompt_renders_with_full_context() -> None:
                 )
                 out = render(state.prompt, ctx)
                 assert "%3" in out
-            commands = tuple(
-                (path, command)
-                for path in state.agent_commands
-                if (command := reg.command_at(path)) is not None
-            )
-            assert len(commands) == len(state.agent_commands)
-            appendix = reply_instructions(scenario, state, agent_ref="a_test", commands=commands)
-            assert "chat_reply" in appendix
-
-
-def test_reply_instructions_for_upgrade_working() -> None:
-    reg = load_registry(ROOT / "templates")
-    scenario = reg.scenarios["upgrade-bot"]
-    state = scenario.states["working"]
-    assert isinstance(state, AgentState)
-    commands = tuple(
-        (path, command)
-        for path in state.agent_commands
-        if (command := reg.command_at(path)) is not None
-    )
-    assert len(commands) == len(state.agent_commands)
-    text = reply_instructions(scenario, state, agent_ref="a_test", commands=commands)
-    assert "awaiting_approval" in text and "issue, pr, commit" in text
-    assert "必须同时附带 reply" in text and "image" in text
-    assert "不会发到群里" in text

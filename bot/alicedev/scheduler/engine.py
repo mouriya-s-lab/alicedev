@@ -86,14 +86,15 @@ class FromChat:
 
 @dataclass(frozen=True)
 class FromAgent:
-    """An agent's ``alicedev run`` triggered the start (§6.1)."""
+    """An independent agent assignment tool triggered the start (§6.1)."""
 
+    agent_ref: str
     call_id: str
     assigned_by: int  # the calling agent's session
 
     @property
     def dedupe_key(self) -> str:
-        return f"call:{self.call_id}"
+        return f"call:{self.agent_ref}:{self.call_id}"
 
 
 Origin = FromChat | FromAgent
@@ -478,18 +479,12 @@ class Scheduler:
             case RepoWorkdir():
                 cwd = row.worktree_path or ""
         agent_ref = new_agent_ref()
-        registry = self._registry()
-        commands = tuple(
-            (path, command)
-            for path in state.agent_commands
-            if (command := registry.command_at(path)) is not None
-        )
         try:
             prompt = dsl_api.render(
                 state.prompt, context(PROMPT_VARS, self.prompt_vars(row, scenario, state, agent_ref))
             )
             prompt = prompt.rstrip() + "\n\n" + dsl_api.reply_instructions(
-                scenario, state, agent_ref=agent_ref, commands=commands
+                scenario, state, agent_ref=agent_ref, tools=state.tools
             )
         except Exception as exc:  # noqa: BLE001 - render errors are reported, not raised
             _LOG.exception("prompt render failed for %s/%s", scenario.name, state.name)

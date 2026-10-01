@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping, Union
 
-from alicedev.domain import SessionView
+from alicedev.domain import RequirementView, SessionView
+from alicedev.agent_tools.model import ToolName
 from alicedev.dsl.model import Action, AgentState, Command, Registry, Scenario, Tmpl
 
 if TYPE_CHECKING:
@@ -78,11 +79,11 @@ def parse_args(matched: Matched) -> ArgsResult:
 
 
 def reply_instructions(
-    scenario: Scenario, state: AgentState, *, agent_ref: str, commands: tuple[tuple[str, Command], ...]
+    scenario: Scenario, state: AgentState, *, agent_ref: str, tools: tuple[ToolName, ...] = ()
 ) -> str:
     from alicedev.dsl.reply_instructions import reply_instructions as _ri
 
-    return _ri(scenario, state, agent_ref=agent_ref, commands=commands)
+    return _ri(scenario, state, agent_ref=agent_ref, tools=tools)
 
 
 def message_key(action: Action, result: str) -> str:
@@ -129,6 +130,14 @@ def session_list_card(
 
     builder = views.SESSION_LIST_CARDS.get(card, views.SESSION_LIST_CARDS["session_list"])
     return builder(rows, page, pages, archived=archived, command=command, scenarios=scenarios)
+
+
+def requirements_list_card(
+    rows: list[RequirementView], page: int, pages: int, *, command: str
+) -> tuple[str, dict[str, Any]]:
+    from alicedev.render import views
+
+    return views.requirements_list_card(rows, page, pages, command=command)
 
 
 def favorites_list_card(

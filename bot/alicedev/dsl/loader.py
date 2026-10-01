@@ -9,17 +9,17 @@ raises for content problems.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 import yaml
 
+from alicedev.agent_tools.model import ADMIN_TOOLS, ToolName
 from alicedev.dsl import render as tmpl
 from alicedev.dsl.invocation import ArgError, match_command, parse_args
 from alicedev.dsl.messages import ACTION_NAMES, required_keys
 from alicedev.dsl.model import (
-    AGENT_ACTIONS,
     AI_ACTIONS,
     BUILTIN_STATES,
     RESULT_KEYS,
@@ -42,6 +42,7 @@ from alicedev.dsl.model import (
     Permission,
     Registry,
     ReplySpec,
+    RequirementAddAction,
     RepoWorkdir,
     Route,
     RouteWhen,
@@ -63,7 +64,8 @@ from alicedev.dsl.usage import UsageProblem, parse_usage
 
 REPLY_KINDS = frozenset({"text", "text_template", "image_template", "image", "sticker", "file"})
 LIST_CARDS: Mapping[ListSource, frozenset[str]] = {
-    ListSource.SESSIONS: frozenset({"session_list", "requirements_list"}),
+    ListSource.SESSIONS: frozenset({"session_list"}),
+    ListSource.REQUIREMENTS: frozenset({"requirements_list"}),
     ListSource.FAVORITES: frozenset({"favorites_list"}),
 }
 # Actions that always render one fixed card (§3.2).
@@ -200,8 +202,6 @@ class _Ctx:
     stickers: frozenset[str]
     scenarios: Mapping[str, Scenario]
     human_commands: frozenset[str]
-    # (scenario, state) -> line of the state declaring agent_commands, for the cross check.
-    agent_command_lines: dict[tuple[str, str], int] = field(default_factory=dict)
 
 
 # --- scenarios ------------------------------------------------------------------
@@ -210,7 +210,7 @@ _SCENARIO_KEYS = (
     "name", "title", "description", "provider", "cwd", "repo", "exclusive", "one_per_chat", "audience",
     "initial", "states",
 )
-_STATE_KEYS = ("kind", "prompt", "reply", "next", "data", "share", "commands", "agent_commands")
+_STATE_KEYS = ("kind", "prompt", "reply", "next", "data", "share", "commands", "tools")
 _REPLY_KEYS = ("kinds", "image_templates", "text_templates", "stickers", "max_text_chars")
 
 
@@ -254,7 +254,7 @@ def _state(name: str, value: Any, line: int, directory: Path, ctx: _Ctx) -> Stat
     share = _bool(m, "share")
     if kind == "agent":
         _keys(
-            m, ("kind", "prompt", "reply", "next", "data", "share", "agent_commands"), ("prompt",), f"状态 {name}"
+            m, ("kind", "prompt", "reply", "next", "data", "share", "tools"), ("prompt",), f"状态 {name}"
         )
         prompt_name = _str(m, "prompt")
         prompt_path = directory / prompt_name
@@ -268,14 +268,18 @@ def _state(name: str, value: Any, line: int, directory: Path, ctx: _Ctx) -> Stat
             tmpl.check(source, tmpl.PROMPT_VARS)
         except tmpl.TemplateProblem as exc:
             raise _Reject(m.at("prompt"), f"{prompt_name}：{exc}") from exc
-        agent_commands = tuple(" ".join(path.split()) for path in _strs(m, "agent_commands"))
-        if any(not path for path in agent_commands):
-            raise _Reject(m.at("agent_commands"), "agent_commands 里有空的指令路径")
-        if len(set(agent_commands)) != len(agent_commands):
-            raise _Reject(m.at("agent_commands"), "agent_commands 里有重复的指令路径")
+        tools: list[ToolName] = []
+        for raw in _strs(m, "tools"):
+            try:
+                tool = ToolName(raw)
+            except ValueError as exc:
+                raise _Reject(m.at("tools"), f"未知的工具：{raw}") from exc
+            if tool in tools:
+                raise _Reject(m.at("tools"), f"tools 里有重复的工具：{raw}")
+            tools.append(tool)
         return AgentState(
             name=name, prompt=Tmpl(source), reply=reply, next=_strs(m, "next"), data=data, share=share,
-            agent_commands=agent_commands,
+            tools=tuple(tools),
         )
     if kind == "human":
         _keys(m, ("kind", "reply", "data", "share", "commands"), ("commands",), f"状态 {name}")
@@ -339,9 +343,16 @@ def _scenario(path: Path, ctx: _Ctx) -> Scenario:
     if exclusive and one_per_chat:
         raise _Reject(m.at("one_per_chat"), "one_per_chat 不能与 exclusive 同用")
     audience = _enum(m, "audience", Audience, "audience") if "audience" in m else Audience.ALL
-    for state in states.values():
-        if isinstance(state, AgentState) and state.agent_commands:
-            ctx.agent_command_lines[(name, state.name)] = states_map.at(state.name)
+    if audience is not Audience.ADMIN:
+        for state in states.values():
+            if isinstance(state, AgentState):
+                for tool in state.tools:
+                    if tool in ADMIN_TOOLS:
+                        state_map = states_map[state.name]
+                        raise _Reject(
+                            state_map.at("tools"),
+                            f"工具 {tool.value} 需要管理员权限，只能出现在 audience: admin 场景的 tools 里",
+                        )
     return Scenario(
         name=name,
         title=title,
@@ -364,6 +375,7 @@ _ACTION_FIELDS: Mapping[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "start": (("scenario", "text"), ("scenario", "text")),
     "github": (("ref", "scenarios"), ("ref", "scenarios")),
     "send": (("session", "text"), ("text",)),
+    "requirement_add": (("text",), ("text",)),
     "session_show": (("session",), ()),
     "session_switch": (("session",), ()),
     "session_rename": (("session", "name"), ("name",)),
@@ -422,6 +434,8 @@ def _action(value: Any, line: int, args: Mapping[str, ArgType], ctx: _Ctx, allow
             return GithubAction(ref=text("ref"), scenarios=mapping)
         case "send":
             return SendAction(session=_arg_ref(body, "session", args, ArgType.SESSION), text=text("text"))
+        case "requirement_add":
+            return RequirementAddAction(text=text("text"))
         case "session_show":
             return SessionShowAction(session=_arg_ref(body, "session", args, ArgType.SESSION))
         case "session_switch":
@@ -714,7 +728,6 @@ def load_registry(root: Path) -> Registry:
 
     commands: dict[str, Command] = {}
     owners: dict[str, Path] = {}
-    rejected_commands: set[str] = set()  # file stems (= command names) rejected on their own
     for path in sorted((root / "commands").glob("*.yaml")):
         try:
             m = _mapping(_load_yaml(path), 1, "指令文件")
@@ -730,7 +743,6 @@ def load_registry(root: Path) -> Registry:
                     )
         except _Reject as exc:
             reject(path, exc)
-            rejected_commands.add(path.stem)
             continue
         for key in (command.name, *command.aliases):
             commands[key] = command
@@ -744,11 +756,6 @@ def load_registry(root: Path) -> Registry:
         except _Reject as exc:
             reject(routes_path, exc)
 
-    _check_agent_commands(scenarios, commands, owners, rejected_commands, ctx, reject)
-    route_scenarios = {name for route in routes for name in _referenced_scenarios(route.do)}
-    if route_scenarios - set(scenarios):
-        errors.append(DslError(path="routes.yaml", line=1, message="路由引用的场景已被拒绝"))
-        routes = ()
     return Registry(
         commands=commands,
         routes=routes,
@@ -756,70 +763,6 @@ def load_registry(root: Path) -> Registry:
         messages=messages,
         errors=tuple(errors),
     )
-
-
-def _referenced_scenarios(action: Action) -> tuple[str, ...]:
-    if isinstance(action, ListAction) and action.scenario is not None:
-        return (action.scenario,)
-    return _started_scenarios(action)
-
-
-def _command_scenarios(command: Command) -> set[str]:
-    names = set(_referenced_scenarios(command.do))
-    for sub in command.subcommands.values():
-        names |= _command_scenarios(sub)
-    return names
-
-
-def _agent_commands_problem(
-    scenario: Scenario, registry: Registry, rejected_commands: set[str]
-) -> str | None:
-    for state in scenario.states.values():
-        if not isinstance(state, AgentState):
-            continue
-        for path in state.agent_commands:
-            command = registry.command_at(path)
-            if command is None:
-                if path.split()[0] in rejected_commands:
-                    continue  # that file's own error is reported; only this entry is unavailable
-                return f"状态 {state.name} 的 agent_commands 引用了不存在的指令：{path}"
-            if not isinstance(command.do, AGENT_ACTIONS):
-                return f"指令 {path} 的动作 {ACTION_NAMES[type(command.do)]} 不能由 agent 调用"
-            if command.permission is Permission.ADMIN and scenario.audience is not Audience.ADMIN:
-                return f"指令 {path} 需要管理员权限，只能出现在 audience: admin 场景的 agent_commands 里"
-    return None
-
-
-def _check_agent_commands(
-    scenarios: dict[str, Scenario],
-    commands: dict[str, Command],
-    owners: dict[str, Path],
-    rejected_commands: set[str],
-    ctx: _Ctx,
-    reject: Callable[[Path, "_Reject"], None],
-) -> None:
-    """Scenarios whose agent_commands name an unknown or forbidden command are rejected,
-    then commands that start or list a rejected scenario are rejected (§3.4, §3.5). An
-    entry naming a command file rejected on its own is only unavailable: one broken
-    command must not take every scenario that lists it down."""
-    view = Registry(commands=commands, routes=(), scenarios=scenarios, messages={}, errors=())
-    for scenario in list(scenarios.values()):
-        problem = _agent_commands_problem(scenario, view, rejected_commands)
-        if problem is None:
-            continue
-        line = next((ln for (sc, _), ln in ctx.agent_command_lines.items() if sc == scenario.name), 1)
-        assert scenario.source is not None
-        reject(scenario.source.path, _Reject(line, problem))
-        del scenarios[scenario.name]
-    for key, command in list(commands.items()):
-        if key != command.name:
-            continue
-        missing = sorted(name for name in _command_scenarios(command) if name not in scenarios)
-        if not missing:
-            continue
-        reject(owners[key], _Reject(1, f"引用了被拒绝的场景：{missing[0]}"))
-        for alias in (command.name, *command.aliases):
-            commands.pop(alias, None)
 
 
 def _rel(root: Path, path: Path) -> str:

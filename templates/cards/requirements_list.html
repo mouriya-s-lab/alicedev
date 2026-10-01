@@ -16,7 +16,6 @@
     header { padding:24px 28px 20px; background:linear-gradient(135deg,#edf3ff,#f8fbff); border-bottom:1px solid var(--line); }
     .eyebrow { color:var(--accent); font-size:17px; font-weight:700; letter-spacing:.08em; }
     h1 { margin:4px 0 0; font-size:31px; line-height:1.25; }
-    .subhead { margin-top:6px; color:var(--muted); font-size:17px; }
     main { padding:14px 20px 18px; }
     .row { display:grid; grid-template-columns:76px 1fr; gap:14px; padding:17px 8px; border-bottom:1px solid var(--line); }
     .row:last-child { border-bottom:0; }
@@ -34,7 +33,6 @@
     <header>
       <div class="eyebrow">alicedev</div>
       <h1>{{ title|default("需求列表") }}</h1>
-      {% if subtitle %}<div class="subhead">{{ subtitle }}</div>{% endif %}
     </header>
     <main>
       {% if rows %}
@@ -44,6 +42,7 @@
           <div class="content">
             <div class="text">{{ row.text|default("") }}</div>
             {% if row.author_name or row.created_at %}<div class="author">{{ row.author_name|default("匿名") }}{% if row.created_at %} · {{ row.created_at }}{% endif %}{% if row.status %}<span class="status">{{ row.status }}</span>{% endif %}</div>{% endif %}
+            {% if row.images %}<div class="author">图片：{{ row.images|length }} 张</div>{% endif %}
           </div>
         </article>
         {% endfor %}

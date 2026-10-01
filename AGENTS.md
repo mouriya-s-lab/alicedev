@@ -14,18 +14,18 @@
 1. **monorepo**：所有 alicedev 代码只在本仓库。paseo 按上游原样使用，**不 fork、不改源码**；alicedev 只在其外面叠加运行配置（harness 产物、provider 配置，ARCHITECTURE §11）。
 2. **paseo daemon 是已部署、不可修改的基础设施，只是一个 daemon**。被动响应；通过 RPC 驱动各 harness（omp / pi / claude / codex）并自行整理 agent 产出与状态。
    - **bot → daemon 的唯一接触面是 paseo CLI**（`paseo workspace create/archive`、`paseo run`、`paseo send`、`paseo inspect`、`paseo ls`、`paseo archive`，全部 `--json`），bot 经 `tools/paseoctl` shim 跨容器（`docker exec -u paseo alicedev-paseo paseo …`）调用；bot 只读 CLI 的 JSON 结果。**禁止 MCP、禁止 WS、禁止自写 daemon 协议客户端。**
-   - **agent → bot 的唯一通道是 `alicedev` CLI**：`alicedev reply` → `POST /v1/reply` 回复群聊；`alicedev run` → `POST /v1/commands` 执行所在状态 `agent_commands` 允许的指令（ARCHITECTURE §6.1）。bot 不读 agent transcript。
+   - **agent → bot 的唯一通道是 `alicedev` CLI**：`reply` → `/v1/reply` 回复/transition；`tools/tool` → `/v1/tools` 发现并调用状态 `tools` allowlist 的独立 typed capabilities（ARCHITECTURE §6.1）。**工具不解析 QQ/TG 指令、不复用聊天 Dispatcher/卡片字段**；bot 不读 transcript。
    - **调度是 bot 的事，AI 是执行者**：agent 里的 AI **不碰 paseo CLI、不起 agent、不推进流程**；会话状态由 AI 通过回复的结构化 `transition` 字段报告，bot 调度校验后推进（ARCHITECTURE §6/§7）。**禁止**直接驱动 harness（`pi`、`omp` 命令行、`--output-schema`）、**禁止**解析模型自由文本当状态、**禁止**在 paseo home 里临时改 provider。
    - omp 与 pi 是两套不同的 harness（omp 建在 pi 底层之上），不可互换；本 session 自己跑在 omp 里，paseo 里的 agent 按场景 DSL 的 `provider`（daemon provider 配置里的 id）跑。
 3. **bot 侧三件事分开**：传输（入站交给指令或路由；出站是消息队列，AI 与 bot 自己入队、平台适配器出队）、调度（会话状态机，场景 = 工作目录或挂钩仓库与 worktree 生命周期 + 状态机 + 状态 prompt；声明独占的场景一次只处理一个会话）、可见性（只有场景声明为可见的状态进聊天）。讨论任何一件时不要把另两件搅进来。
    - **术语**：用户可见的单位是**会话**，群里用本群自增的 `%n` 指代；会话内部为每个 agent 状态起的 paseo 运行单元叫 **agent**，对用户不可见（ARCHITECTURE §2）。
    - **指令两类**：程序指令不经过 AI；AI 指令要么新开会话，要么发到已有会话（`%n` 指定，省略则取引用消息所属会话、本群当前会话）。会话有完整的列表/详情/切换/重命名/归档指令。
-   - bot 的全部 AI 业务都是场景：`/需求`、`/帮我调查`、`/解读` 是单对话态场景，`/升级bot` 是多状态场景；不为某个场景另起实现，也不把某个场景的细节写进调度本身。
+   - bot 的全部 AI 业务都是场景：调查、解读、管家是单对话态，升级bot是多状态。`/需求` 是程序指令，需求与收藏为独立记录/列表，不创建会话或改 current。不为某个场景另起调度实现。
 4. **daemon 不会自己推进流程**。会话进入下一状态 = 当前 agent 的 AI 经回复报告 `transition` → bot 调度校验 → 需要时调度经 paseo CLI 起下一状态的 agent。
 5. **无 MCP、无 WS**：bot → daemon 只走 paseo CLI shim。paseo 里的 agent 不用 MCP（pi 默认无 MCP）：CLI + skill + pi-unified-exec（`docker exec -it` / ssh）。跨容器调用走 `tools/` 下的 shim（`tgctl` / `paseoctl` / `deployctl`）。e2e、tg-cli 怎么用是场景状态 prompt 的事。
 6. **容器拓扑固定**（ARCHITECTURE §1）：`deploy` 项目常驻 `caddy` `gateway` `astrbot` `snowluma` `paseo` `t2i`；`e2e`、`tg-cli` 是独立常驻的 compose 项目，永不随 `deploy` 下线；`e2e` 内不跑 pi、不是第二个 daemon。
 7. **AI 工作目录**：无 `repo` 的场景，agent 在场景 `cwd`（如 `/workspace/openalice`）里；有 `repo` 的场景，agent 只在该会话从挂钩仓库 fixed-main 派生的 worktree 里。fixed-main（如 `/workspace/alicedev`）永不开 AI、永不写。
-8. **部署只碰 astrbot 插件**：宿主 alicedev 检出切到 main 上的目标 SHA（交付 `bot/` 与 `templates/`）+ AstrBot 插件热重载；`requirements.txt` 变化才 `restart astrbot`；paseo 不动。AstrBot 自己的配置（管理员名单、平台、插件配置）归 AstrBot，部署与 IaC 不覆盖（ARCHITECTURE §11）。
+8. **普通 bot 部署只碰插件**：main SHA交付 bot/templates 并热重载；依赖变化才 restart AstrBot，paseo不动。**涉及tool协议/harness或数据cutover必须按ARCHITECTURE §11协同维护发布**：新overlay先构建，关闭入站，source确认旧会话退休，迁移先于Dispatcher/API开放，失败rollforward而非旧协议自动rollback。AstrBot配置归服务，IaC/部署不覆盖。
 9. **模型是部署配置**：paseo daemon 的 provider 配置文件决定；bot 只传 provider id。代码里不写死模型；换模型改一行配置。`/升级bot` 会话用 task:low 同款 `muse-spark-1.3-contributor`。**未经用户允许禁止用其他付费模型跑任何测试。**
 10. **指令全部 DSL 化**：指令、消息路由、场景、用户可见的固定文字只写在 `templates/` 的 YAML DSL 里（ARCHITECTURE §3）；代码只实现封闭的动作、参数类型与卡片渲染。**禁止**在代码里写死指令、回话或场景；新增指令先看现有动作能否组合，确需新动作才加代码并同步 §3.2 的动作表。改完 DSL 必须跑 `python -m alicedev.dsl check` 并看 `dsl card` 出的图。
 

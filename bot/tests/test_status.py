@@ -42,9 +42,9 @@ def test_status_snapshot_matches_expected_store_state(tmp_path: Path, monkeypatc
         env = await make_env(tmp_path)
         try:
             rows = (
-                (1, "requirement", "discussing"),
-                (2, "requirement", "queued"),
-                (3, "requirement", "failed"),
+                (1, "investigate", "discussing"),
+                (2, "investigate", "queued"),
+                (3, "investigate", "failed"),
                 (4, "upgrade-bot", "active"),
             )
             async with env.store.lock:
@@ -90,7 +90,7 @@ def test_status_snapshot_matches_expected_store_state(tmp_path: Path, monkeypatc
                 routes=(),
                 scenarios={
                     "upgrade-bot": env.registry.scenarios["upgrade-bot"],
-                    "requirement": env.registry.scenarios["requirement"],
+                    "investigate": env.registry.scenarios["investigate"],
                 },
                 messages={},
                 errors=(DslError("templates/broken.yaml", 7, "invalid command"),),
@@ -116,7 +116,7 @@ def test_status_snapshot_matches_expected_store_state(tmp_path: Path, monkeypatc
                 "uptime_s": 25,
                 "platforms": ["telegram", "qq"],
                 "commands": ["alpha", "zeta"],
-                "scenarios": ["requirement", "upgrade-bot"],
+                "scenarios": ["investigate", "upgrade-bot"],
                 "dsl_errors": [
                     {"path": "templates/broken.yaml", "line": 7, "message": "invalid command"}
                 ],

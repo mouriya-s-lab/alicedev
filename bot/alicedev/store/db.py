@@ -77,6 +77,7 @@ class Store:
             ("seq_sessions", "sessions", "session_id"),
             ("seq_favorites", "favorites", "id"),
             ("seq_outbox", "outbox", "seq"),
+            ("seq_requirements", "requirements", "id"),
         ):
             row = await self.fetch_one(f"SELECT COALESCE(MAX({column}), 0) FROM {table}")
             start = (int(row[0]) if row else 0) + 1

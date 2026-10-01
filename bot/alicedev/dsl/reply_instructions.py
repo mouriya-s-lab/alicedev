@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from alicedev.agent_tools.model import ToolName
 
 from alicedev.dsl.model import (
     AgentState,
-    Command,
     HumanState,
     ReplySpec,
     Scenario,
@@ -18,11 +17,11 @@ _HEADER = "---\n## 回复方式（alicedev）"
 
 
 def reply_instructions(
-    scenario: Scenario, state: AgentState, *, agent_ref: str, commands: Sequence[tuple[str, Command]]
+    scenario: Scenario, state: AgentState, *, agent_ref: str, tools: tuple[ToolName, ...] = ()
 ) -> str:
-    """``commands``: the state's ``agent_commands`` as (path, command), in declared order."""
+    """Append the state's declared independent tool names and runtime discovery entry point."""
     lines: list[str] = [_HEADER, ""]
-    lines.append("你只能通过 `chat_reply` 工具与群聊和 bot 通信；调用成功之前不要结束本轮。")
+    lines.append("向群聊回复与报告状态只能通过 `chat_reply`；调用成功之前不要结束本轮。")
     lines.append("`chat_reply` 的参数是 `{ reply?, transition? }`，两者至少带一个。")
     lines.append("")
     if state.reply is not None:
@@ -46,22 +45,21 @@ def reply_instructions(
             lines.extend(_target_lines(scenario, target_name))
     else:
         lines.append("本状态没有可报告的下一个状态，只需要用 `reply` 回复群聊。")
-    if commands:
+    if tools:
         lines.append("")
-        lines.extend(_command_lines(agent_ref, commands))
+        lines.extend(_tool_lines(agent_ref, tools))
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _command_lines(agent_ref: str, commands: Sequence[tuple[str, Command]]) -> list[str]:
-    lines = [
-        "### 可用指令（alicedev run）",
-        f"你可以代表本会话的发起人调用下面的 bot 指令。你的 agent 标识是 `{agent_ref}`，调用方法见 skill `alicedev`：",
-        f"`alicedev run --agent {agent_ref} '<指令行>'`（先用 `alicedev commands --agent {agent_ref}` 看参数说明）。",
+def _tool_lines(agent_ref: str, tools: tuple[ToolName, ...]) -> list[str]:
+    return [
+        "### 独立工具（alicedev）",
+        f"你的 agent_ref 是 `{agent_ref}`；工具代表本会话发起人执行操作，不是聊天指令。",
+        "调用前阅读 skill `alicedev`，以运行时发现结果中的参数 schema 和权限为准：",
+        f"`alicedev tools --agent {agent_ref}`",
+        "本状态声明的工具：" + "、".join(f"`{tool.value}`" for tool in tools),
+        "需要发送会话链接时由 bot 直接投递；不要自行发送或转述链接。",
     ]
-    for path, command in commands:
-        lines.append(f"- `{command.usage}`（{path}）：{command.summary}")
-    lines.append("调用结果会写明做了什么；开会话、收藏这类操作 bot 会在群里留痕，你不需要再转述一遍。")
-    return lines
 
 
 def _spec_lines(spec: ReplySpec) -> list[str]:
