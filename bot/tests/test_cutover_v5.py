@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -15,8 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "bot"))
 
 from alicedev.domain import JsonValue
+from alicedev.paseo.cli import CliPaseoControl
 from alicedev.paseo.control import (
-    AgentHandle, AgentStatus, GitResult, LiveAgent, PaseoControl, PaseoError, WorkspaceRef,
+    LABEL_KEY, AgentHandle, AgentStatus, GitResult, LiveAgent, PaseoControl, PaseoError, WorkspaceRef,
 )
 from alicedev.store.cutover_v5 import run
 from alicedev.store.db import Store
@@ -650,6 +652,157 @@ def test_successful_current_and_legacy_label_absence_retires_an_idless_row(tmp_p
             assert await store.fetch_one("SELECT agent_id, status FROM agents WHERE agent_ref = 'a_missing'") == (None, "archived")
             assert await store.fetch_all("SELECT * FROM chat_current_sessions") == []
             assert await store.fetch_one("SELECT text FROM requirements") == ("original without a created agent",)
+            assert (await run(store, paseo)).skipped
+        finally:
+            await store.close()
+
+    asyncio.run(main())
+
+
+@pytest.mark.parametrize("label_ref", ("a_missing", "s_missing"), ids=("current-label", "legacy-label"))
+@pytest.mark.parametrize("payload", (
+    pytest.param([None], id="non-object"),
+    pytest.param([{}], id="missing-id"),
+    pytest.param([{"id": None}], id="null-id"),
+    pytest.param([{"id": ""}], id="empty-id"),
+    pytest.param([{"id": 123}], id="numeric-id"),
+    pytest.param([{"id": "daemon-first"}, None], id="malformed-after-valid"),
+    pytest.param([None, {"id": "daemon-last"}], id="malformed-before-valid"),
+))
+def test_malformed_cli_label_rows_abort_cutover_without_committing(
+    tmp_path: Path, label_ref: str, payload: JsonValue,
+) -> None:
+    async def main() -> None:
+        path = tmp_path / "malformed-cli-label.duckdb"
+        store = Store(path)
+        await store.open()
+        calls: list[tuple[str, ...]] = []
+        inventory = ("ls", "-a", "-g", "--json")
+        current = ("ls", "-a", "-g", "--label", f"{LABEL_KEY}=a_missing", "--json")
+        legacy = ("ls", "-a", "-g", "--label", f"{LABEL_KEY}=s_missing", "--json")
+        malformed = current if label_ref == "a_missing" else legacy
+
+        async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+            args = tuple(argv[6:])
+            calls.append(args)
+            # A partially accepted list must not reach inspect/status, archive,
+            # send or create; only the expected read-only source queries exist.
+            if args == inventory or (args == current and malformed == legacy):
+                return 0, "[]", ""
+            if args == malformed:
+                return 0, json.dumps(payload), ""
+            raise AssertionError(f"malformed label lookup continued to {args}")
+
+        try:
+            await _session(store, 1, value={"text": "original awaiting cutover"}, state="queued")
+            await _agent(store, 1, "a_missing", None, legacy="s_missing", status="creating")
+            await _current(store, 1, "native")
+            await _session(store, 2, scenario="upgrade-bot", state="working", chat="protected")
+            await _agent(store, 2, "a_protected", "daemon-protected")
+            await _current(store, 2, "protected")
+            await store.execute(
+                "INSERT INTO messages (msg_ref, chat_key, text, session_id, created_at) "
+                "VALUES ('m_original', 'native', '保留的历史原文', 1, ?)", (STAMP,))
+            await RequirementsRepo(store).save(NewRequirement(
+                "native", "telegram:owner", "原作者", "既有需求", (), None,
+                RequirementSource(RequirementSourceKind.CHAT_MESSAGE, "prior-message")))
+            before = await _snapshot(store, CUTOVER_TABLES)
+            sequences = await store.fetch_all(
+                "SELECT sequence_name, start_value, last_value FROM duckdb_sequences() ORDER BY sequence_name")
+            with pytest.raises(PaseoError):
+                await run(store, CliPaseoControl(runner=runner))
+            assert calls == ([inventory, current] if malformed == current else [inventory, current, legacy])
+            assert await _snapshot(store, CUTOVER_TABLES) == before
+            assert await store.fetch_all(
+                "SELECT sequence_name, start_value, last_value FROM duckdb_sequences() ORDER BY sequence_name") == sequences
+        finally:
+            await store.close()
+        reopened = Store(path)
+        await reopened.open()
+        try:
+            assert await _snapshot(reopened, CUTOVER_TABLES) == before
+            # Store.open reseeds sequences from retained rows, so verify the
+            # next consumer-visible IDs rather than pre-reopen catalog fields.
+            assert await reopened.next_id("seq_requirements") == 2
+            assert await reopened.next_id("seq_sessions") == 3
+        finally:
+            await reopened.close()
+
+    asyncio.run(main())
+
+
+@pytest.mark.parametrize("label_ref", ("a_missing", "s_missing"), ids=("current-label", "legacy-label"))
+@pytest.mark.parametrize("id_key", ("id", "agentId", "Id"))
+def test_valid_cli_label_rows_preserve_aliases_and_first_match(
+    tmp_path: Path, label_ref: str, id_key: str,
+) -> None:
+    async def main() -> None:
+        store = Store(tmp_path / "valid-cli-label.duckdb")
+        await store.open()
+
+        async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+            args = tuple(argv[6:])
+            if args == ("ls", "-a", "-g", "--json"):
+                return 0, "[]", ""
+            if args == ("ls", "-a", "-g", "--label", f"{LABEL_KEY}={label_ref}", "--json"):
+                return 0, json.dumps([{id_key: "daemon-first", "name": "extra metadata"},
+                                     {"id": "daemon-second"}]), ""
+            if args == ("ls", "-a", "-g", "--label", f"{LABEL_KEY}=a_missing", "--json"):
+                return 0, "[]", ""
+            if args == ("status", "--json"):
+                return 0, '{"serverId":"fixture-server"}', ""
+            if args == ("inspect", "daemon-first", "--json"):
+                return 0, '{"Id":"daemon-first","Archived":true}', ""
+            raise AssertionError(f"unexpected source mutation or wrong match: {args}")
+
+        try:
+            await _session(store, 1, value={"text": "valid label original"}, state="queued")
+            await _agent(store, 1, "a_missing", None, legacy="s_missing", status="creating")
+            await _current(store, 1, "native")
+            report = await run(store, CliPaseoControl(runner=runner))
+            assert (report.retired_sessions, report.archived_agents, report.runtime_reset_agents,
+                    report.native_requirements) == (1, 1, 0, 1)
+            assert await store.fetch_one("SELECT agent_id, status FROM agents WHERE agent_ref = 'a_missing'") == (
+                "daemon-first", "archived",
+            )
+            assert await store.fetch_one("SELECT state FROM sessions WHERE session_id = 1") == ("archived",)
+            assert await store.fetch_all("SELECT * FROM chat_current_sessions") == []
+            assert await store.fetch_all("SELECT text, source_ref FROM requirements") == [("valid label original", "1")]
+        finally:
+            await store.close()
+
+    asyncio.run(main())
+
+
+def test_valid_empty_cli_labels_preserve_runtime_reset_cutover(tmp_path: Path) -> None:
+    async def main() -> None:
+        store = Store(tmp_path / "empty-cli-labels.duckdb")
+        await store.open()
+
+        async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+            args = tuple(argv[6:])
+            if args in (
+                ("ls", "-a", "-g", "--json"),
+                ("ls", "-a", "-g", "--label", f"{LABEL_KEY}=a_missing", "--json"),
+                ("ls", "-a", "-g", "--label", f"{LABEL_KEY}=s_missing", "--json"),
+            ):
+                return 0, "[]", ""
+            raise AssertionError(f"valid source absence must not mutate paseo: {args}")
+
+        try:
+            await _session(store, 1, value={"text": "original with no source match"}, state="queued")
+            await _agent(store, 1, "a_missing", None, legacy="s_missing", status="creating")
+            await _current(store, 1, "native")
+            paseo = CliPaseoControl(runner=runner)
+            report = await run(store, paseo)
+            assert (report.retired_sessions, report.archived_agents, report.runtime_reset_agents,
+                    report.native_requirements) == (1, 0, 1, 1)
+            assert await store.fetch_one("SELECT agent_id, status FROM agents WHERE agent_ref = 'a_missing'") == (
+                None, "archived",
+            )
+            assert await store.fetch_one("SELECT state FROM sessions WHERE session_id = 1") == ("archived",)
+            assert await store.fetch_all("SELECT * FROM chat_current_sessions") == []
+            assert await store.fetch_all("SELECT text, source_ref FROM requirements") == [("original with no source match", "1")]
             assert (await run(store, paseo)).skipped
         finally:
             await store.close()

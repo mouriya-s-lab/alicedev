@@ -15,7 +15,8 @@ All knowledge of the CLI's JSON shapes lives here. Shapes observed on prod
 * Errors: ``{"error": {"code", "message"}}`` (exit code may be 0 or 1).
 
 Parsing is defensive: unknown extra keys are ignored, missing required keys
-raise :class:`CliShapeError`.
+raise :class:`CliShapeError`. Label inventories reject every malformed row;
+only a completely valid empty list establishes that a label was not found.
 """
 
 from __future__ import annotations
@@ -92,11 +93,13 @@ def ls_agent_ids(doc: Any) -> list[str]:
     if not isinstance(doc, list):
         raise CliShapeError("ls: expected list")
     ids: list[str] = []
-    for item in doc:
-        if isinstance(item, Mapping):
-            agent_id = _get(item, "id", "agentId", "Id")
-            if isinstance(agent_id, str) and agent_id:
-                ids.append(agent_id)
+    for index, item in enumerate(doc):
+        if not isinstance(item, Mapping):
+            raise CliShapeError(f"ls: row {index}: expected object")
+        agent_id = _get(item, "id", "agentId", "Id")
+        if not isinstance(agent_id, str) or not agent_id:
+            raise CliShapeError(f"ls: row {index}: expected nonempty string id")
+        ids.append(agent_id)
     return ids
 
 
