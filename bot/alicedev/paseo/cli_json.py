@@ -128,6 +128,12 @@ def inspect_status(doc: Any) -> AgentStatus:
     return map_status(status)
 
 
+def inspect_archived(doc: object) -> bool:
+    if not isinstance(doc, Mapping) or type(doc.get("Archived")) is not bool:
+        raise CliShapeError("inspect: expected explicit boolean Archived")
+    return doc["Archived"]
+
+
 def workspace_ref(doc: Any) -> WorkspaceRef:
     item = doc[0] if isinstance(doc, list) and doc else doc
     if not isinstance(item, Mapping):

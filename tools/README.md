@@ -30,6 +30,9 @@ The checkout lives at `/srv/alicedev/app` on the host and is mounted at `/deploy
 
 `run` rolls back to the previous HEAD on any failure (rollback prefers the failed-plugin route). Exit 0 only for `active`.
 
+Protocol/data cutovers are not ordinary bot releases: use the maintenance sequence in `.omp/rules/deploy.md` §4. `apply --activate restart` verifies without automatic rollback; do not use `run`/`deployrun` after schema v5 retirement or new-protocol writes. Prebuild the overlay from an independent target-SHA context without moving this live checkout, and keep gateway/AstrBot stopped across the harness/bot boundary.
+
+
 Bootstrap (host, once; `make bootstrap-app COMMIT=<sha>` from a developer checkout does this over ssh with the host's `.env`):
 
 ```sh

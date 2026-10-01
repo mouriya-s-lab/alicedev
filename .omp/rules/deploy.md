@@ -55,6 +55,15 @@ docker exec -u paseo alicedev-paseo /deploy/app/tools/deployctl status --app /de
 | `gateway/` | 宿主检出切到新 SHA（同时改了 `bot/` 时，先按第一行跑 `deployrun`，它会一并切检出）→ `docker tag` 当前镜像为 `alicedev/gateway:rollback-<tag>` → `docker compose … build gateway` → `docker compose … up -d --no-deps gateway`。不动 paseo；重启网关会使尚未兑换的一次性链接失效 |
 | paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ IaC apply（§6）→ `make paseo-src` → 打回滚标签 → `build` → `up` → 按 §5 重新核对分享视图 |
 
+### typed tools 与 schema v5 协同切换
+
+此协议切换同时改 bot、templates 与 harness，不能先热重载 bot 再更新镜像。先用目标完整 SHA 的独立 build context 构建 paseo overlay；compose 的 `ALICEDEV_APP_DIR` override 只用于 build，绝不用于 up，不提前移动 `/srv/alicedev/app`。构建前保留当前 image 的回滚标签。
+
+排空旧 outbox，确认 daemon 没有会被重建中断的 upgrade-bot working/deploying 或未知 runtime，并核对 schedule 清单为空。维护窗口停止 gateway 和 AstrBot；只重建 paseo，使用正常 live checkout 绑定和原持久卷。**启动 AstrBot 前**必须核对新容器身份、无 OMP 子进程、schedule 清单仍为空；不满足就保持维护，不启用候选 revision。随后在新 paseo 里以 uid1000 运行 `deployctl apply --app /deploy/app --commit <sha> --activate restart --timeout 1800`，由 apply 移动检出并启动 AstrBot。插件在接收入站前结束旧 bot 对话/agent 使用，区分 paseo 显式归档与容器重建的 runtime reset，恢复独立需求事实并原子提交 v5 marker；健康、迁移及旧 paseo 历史保留核验后才恢复 gateway。完成 marker 前，这个 revision 不允许普通热重载上线。SnowLuma、e2e、tg-cli 不动。
+
+不使用 `deployrun` 或 `deployctl run` 的自动回滚。归档/新数据提交后失败时保持维护，修复后 rollforward；旧会话不得复活。正常 bot/DSL 回滚与镜像标签回滚不适用于跨此数据/协议边界。临时构建产物不放宿主 `/tmp` tmpfs，用后删除。
+
+
 ### 首次搭建（或全部重建）
 
 在开发机的 alicedev 检出里：

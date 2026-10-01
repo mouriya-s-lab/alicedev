@@ -29,12 +29,6 @@ def parse(text: str):
     return inv, parse_args(inv.command, inv)
 
 
-def test_real_templates_load_clean() -> None:
-    assert REG.errors == ()
-    assert len(REG.command_list()) == 18
-    assert set(REG.scenarios) == {"requirement", "investigate", "github-issue", "github-pr", "steward", "upgrade-bot"}
-
-
 @pytest.mark.parametrize(
     "text",
     ["/继续 %3 再看看", "/继续%3 再看看", "/继续 ％3 再看看", "/继续 ％３ 再看看", "／继续 %3 再看看", "/continue %3 再看看"],

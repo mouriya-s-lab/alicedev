@@ -1,8 +1,10 @@
-"""Unit tests: paseo CLI parsing/argv, mainsync, outbox ordering/retry/render, inbound markers."""
+"""Unit tests: paseo CLI boundaries, mainsync, outbox ordering/retry/render, inbound markers."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -42,41 +44,31 @@ def test_cli_json_shapes() -> None:
     assert cli_json.map_status("weird") is AgentStatus.UNKNOWN
 
 
-def test_cli_control_argv() -> None:
-    calls: list[list[str]] = []
+def test_cli_control_domain_results() -> None:
     replies = {"run": RUN, "status": STATUS, "ls": LS, "inspect": INSPECT, "workspace": WS}
 
-    async def runner(argv, timeout):
-        calls.append(list(argv))
-        verb = argv[6] if argv[5] == "paseo" else argv[5]  # docker exec -u paseo <c> <bin> <verb>
-        return 0, replies.get(verb, ""), ""
+    async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+        if "git" in argv:
+            return 0, "abc123\n", ""
+        verb = next(arg for arg in argv if arg in replies)
+        return 0, replies[verb], ""
 
     async def main() -> None:
         c = CliPaseoControl(container="pc", runner=runner)
         h = await c.create(agent_ref="a_x", provider="omp/m", cwd="/w", title="t",
                            initial_prompt="/chat_ingress {}", workspace_id="ws1")
-        assert (h.workspace_id, h.server_id) == ("ws1", "srv-abc")
-        assert calls[0] == ["docker", "exec", "-u", "paseo", "pc", "paseo", "run", "/chat_ingress {}", "--background",
-                            "--provider", "omp/m", "--cwd", "/w", "--title", "t",
-                            "--label", "alicedev=a_x", "--workspace", "ws1", "--json"]
-        await c.send("ag1", "/chat_ingress {}")
-        assert calls[-1] == ["docker", "exec", "-u", "paseo", "pc", "paseo", "send", "--no-wait", "ag1",
-                             "--prompt", "/chat_ingress {}"]
-        assert (await c.find_by_label("a_x")).agent_id.startswith("4be1c0de")
-        assert calls[-1][6:] == ["ls", "-a", "-g", "--label", "alicedev=a_x", "--json"]
-        assert await c.status("ag1") is AgentStatus.RUNNING
-        await c.archive("ag1")
-        assert calls[-1][6:] == ["archive", "--force", "ag1"]
-        await c.worktree_create(repo="/workspace/alicedev", base_ref="main", slug="s12")
-        assert calls[-1][6:] == ["workspace", "create", "--isolation", "worktree", "--path",
-                                 "/workspace/alicedev", "--mode", "branch-off", "--base", "main",
-                                 "--worktree-slug", "s12", "--new-branch", "alicedev/s12",
-                                 "--title", "s12", "--json"]
-        await c.workspace_local("/workspace/openalice", "需求")
-        assert calls[-1][6:11] == ["workspace", "create", "--isolation", "local", "--path"]
-        await c.git("/workspace/alicedev", "rev-parse", "HEAD")
-        assert calls[-1] == ["docker", "exec", "-u", "paseo", "pc", "git", "-C",
-                             "/workspace/alicedev", "rev-parse", "HEAD"]
+        assert (h.agent_id, h.workspace_id, h.server_id) == (
+            "4be1c0de-1111-2222-3333-444455556666", "ws1", "srv-abc",
+        )
+        recovered = await c.find_by_label("a_x")
+        assert recovered is not None
+        assert (recovered.agent_id, recovered.server_id) == (h.agent_id, h.server_id)
+        assert await c.status(h.agent_id) is AgentStatus.RUNNING
+        worktree = await c.worktree_create(repo="/workspace/alicedev", base_ref="main", slug="s12")
+        assert (worktree.workspace_id, worktree.cwd) == ("ws_01", "/root/.paseo/worktrees/s12")
+        local = await c.workspace_local("/workspace/openalice", "需求")
+        assert (local.workspace_id, local.cwd) == ("ws_01", "/root/.paseo/worktrees/s12")
+        assert await c.git("/workspace/alicedev", "rev-parse", "HEAD") == GitResult(0, "abc123\n", "")
 
     asyncio.run(main())
 
@@ -93,6 +85,129 @@ def test_cli_control_errors() -> None:
             await c.send("nope", "x")
 
     asyncio.run(main())
+
+
+def _cli_with_output(stdout: str, *, returncode: int = 0) -> CliPaseoControl:
+    async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+        return returncode, stdout, ""
+
+    return CliPaseoControl(runner=runner)
+
+
+def test_cli_all_agent_ids_includes_archived_and_other_workspaces() -> None:
+    current = json.loads(LS)[0]
+    archived = {**current, "id": "archived-agent", "status": "closed"}
+    other = {**current, "id": "other-workspace-agent", "cwd": "/workspace/other",
+             "provider": "another-provider", "status": "running"}
+
+    async def runner(argv: Sequence[str], timeout: float) -> tuple[int, str, str]:
+        visible = [current]
+        if "-a" in argv:
+            visible.append(archived)
+        if "-g" in argv:
+            visible.append(other)
+        return 0, json.dumps(visible), ""
+
+    c = CliPaseoControl(runner=runner)
+    assert asyncio.run(c.all_agent_ids()) == [
+        current["id"], "archived-agent", "other-workspace-agent",
+    ]
+
+
+def test_cli_all_agent_ids_empty_success() -> None:
+    assert asyncio.run(_cli_with_output("[]").all_agent_ids()) == []
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        '{"status":"closed"}',
+        '{"id":""}',
+        '{"id":null}',
+        '{"id":42}',
+        '{"id":true}',
+        "null",
+        '"agent-id"',
+        "[]",
+    ],
+)
+def test_cli_all_agent_ids_rejects_malformed_rows_without_partial_results(bad_row: str) -> None:
+    valid_row = LS[1:-1]
+    c = _cli_with_output(f"[{valid_row},{bad_row}]")
+    with pytest.raises(PaseoError):
+        asyncio.run(c.all_agent_ids())
+
+
+@pytest.mark.parametrize(
+    ("stdout", "returncode"),
+    [
+        ("", 0),
+        ("not JSON", 0),
+        ("{}", 0),
+        ("null", 0),
+        (ERROR, 0),
+        (ERROR, 1),
+        ("[]", 1),
+    ],
+)
+def test_cli_all_agent_ids_does_not_treat_query_failure_as_empty(stdout: str, returncode: int) -> None:
+    c = _cli_with_output(stdout, returncode=returncode)
+    with pytest.raises(PaseoError):
+        asyncio.run(c.all_agent_ids())
+
+
+@pytest.mark.parametrize("count", [199, 200, 201])
+def test_cli_all_agent_ids_fails_closed_at_unpaged_server_limit(count: int) -> None:
+    recorded_row = json.loads(LS)[0]
+    ids = [f"agent-{index}" for index in range(count)]
+    stdout = json.dumps([{**recorded_row, "id": agent_id} for agent_id in ids])
+    c = _cli_with_output(stdout)
+    if count < 200:
+        assert asyncio.run(c.all_agent_ids()) == ids
+    else:
+        with pytest.raises(PaseoError):
+            asyncio.run(c.all_agent_ids())
+
+
+@pytest.mark.parametrize("status", ["closed", "running"])
+@pytest.mark.parametrize("archived", [False, True])
+def test_cli_is_archived_uses_explicit_boolean_not_status(status: str, archived: bool) -> None:
+    stdout = json.dumps({**json.loads(INSPECT), "Status": status, "Archived": archived})
+    assert asyncio.run(_cli_with_output(stdout).is_archived("agent-id")) is archived
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        '{"Status":"closed"}',
+        '{"Status":"closed","archived":true}',
+        '{"Status":"closed","Archived":null}',
+        '{"Status":"closed","Archived":0}',
+        '{"Status":"closed","Archived":1}',
+        '{"Status":"closed","Archived":"true"}',
+        '{"Status":"closed","Archived":"false"}',
+        '{"Status":"closed","Archived":[]}',
+        '{"Status":"closed","Archived":{}}',
+        "[]",
+    ],
+)
+def test_cli_is_archived_rejects_missing_or_nonboolean_archive_fact(stdout: str) -> None:
+    with pytest.raises(PaseoError):
+        asyncio.run(_cli_with_output(stdout).is_archived("agent-id"))
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_cli_is_archived_inspect_failed_is_not_absence(returncode: int) -> None:
+    stdout = '{"error":{"code":"INSPECT_FAILED","message":"agent not found"}}'
+    c = _cli_with_output(stdout, returncode=returncode)
+    with pytest.raises(PaseoError, match="INSPECT_FAILED"):
+        asyncio.run(c.is_archived("agent-id"))
+
+
+def test_cli_archive_failure_propagates() -> None:
+    c = _cli_with_output(ERROR, returncode=1)
+    with pytest.raises(PaseoError):
+        asyncio.run(c.archive("agent-id"))
 
 
 # --- mainsync ---------------------------------------------------------------------------

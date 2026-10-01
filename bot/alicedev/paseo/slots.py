@@ -1,10 +1,10 @@
-"""Live-agent slot pool (ARCHITECTURE §4 在线名额).
+"""Bot live-agent admission pool (ARCHITECTURE §4).
 
-Every resident paseo runtime (``paseo ls``, not ``closed``) costs an ``omp`` process.
-The pool caps how many may exist at once. It is the only place that decides
-admission: creating an agent and waking a parked one both go through
-:meth:`SlotPool.admit`, and the slot is held until the caller's ``create``/``send``
-has returned, so concurrent requests cannot both count the same free slot.
+The pool bounds bot-created/woken runtimes using paseo's global visible inventory.
+This is not a daemon-wide cap: internal/unplaced runtimes and starts outside the
+bot are outside its authority. Both create and wake go through SlotPool.admit;
+the slot is held until create/send returns, so concurrent bot requests cannot
+both count the same free slot.
 
 The count always comes from paseo (``live_agents``), never from DuckDB, and a
 failed query refuses admission. When the cap is reached the pool parks the

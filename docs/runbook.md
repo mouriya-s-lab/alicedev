@@ -25,7 +25,7 @@ SSH：`ssh -i ~/.ssh/dev-dai -o IdentitiesOnly=yes root@160.191.41.242`。compos
 ## 5. 已知限制
 
 - AstrBot 主动发消息拿不到平台消息 id：引用 bot 消息时按消息首行的 `%n` 标记找会话。
-- paseo 0.8.0 没有空闲卸载，`paseo stop` 对 idle agent 是空操作，每个未归档的 agent 都常驻一个 `omp` 进程（约 220 MB）。bot 用 `paseo archive` 停放空闲 agent 并把在线 agent 限制在 `max_live_agents`（默认 4，ARCHITECTURE §4）；停放后 `paseo send` 自动唤醒并恢复对话。宿主 8 GB、没有 swap，手工在 paseo 里起大量 agent 仍会拖垮宿主。
+- paseo 0.8.0 没有空闲卸载，`paseo stop` 对 idle agent 是空操作；本环境每个在线 omp agent 的进程约 220 MB。bot 用 `paseo archive` 停放空闲 agent，创建/唤醒经 `max_live_agents` 准入（默认 4，ARCHITECTURE §4）；停放后 `paseo send` 自动唤醒并恢复对话。paseo 上游原样，没有 daemon 全局硬上限：直接网页/CLI/计划任务可绕过 bot，清单也不覆盖 internal/unplaced runtime；宿主 8 GB、没有 swap，手工起大量 agent 仍会拖垮宿主。
 - 分享视图：上游 paseo 前端的首次加载路由竞态与重复连接问题由网关注入的 `paseo-boot.js` 绕开（ARCHITECTURE §8）；它会清掉浏览器里 paseo 的 host 注册表，paseo 升级后需重新核对。
 - 重启网关会使尚未兑换的一次性分享链接失效；网关镜像只由 `docker compose … build gateway` 与 `up -d --no-deps gateway` 更新。
 - 所有容器同时 unhealthy、`docker exec` 报 `no space left on device`：宿主 `/tmp` tmpfs 满了，处理见 `.omp/rules/deploy.md` §3。

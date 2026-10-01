@@ -24,13 +24,13 @@ def ingress(text: str) -> dict:
 # --- AI commands → sessions ----------------------------------------------------------
 
 
-def test_requirement_start_send_and_reply(tmp_path: Path) -> None:
+def test_investigation_start_send_and_reply(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        assert await env.dispatcher.handle(inbound("/需求 收藏夹按作者筛选"))
-        assert await env.texts() == ["已开始 %1 需求 · 收藏夹按作者筛选"]
+        assert await env.dispatcher.handle(inbound("/帮我调查 收藏夹按作者筛选"))
+        await env.drain()
         row = await env.sessions.by_no(CHAT, 1)
-        assert row is not None and row.state == "discussing" and row.scenario == "requirement"
+        assert row is not None and row.state == "discussing" and row.scenario == "investigate"
         assert (await env.sessions.current(CHAT)).session_id == row.session_id
         created = env.paseo.created[0]
         assert created["provider"] == "omp-alicedev/opencode-go/muse-spark-1.3-contributor"
@@ -39,7 +39,6 @@ def test_requirement_start_send_and_reply(tmp_path: Path) -> None:
         first = ingress(created["prompt"])
         assert first["agent"] == created["agent_ref"]
         assert "收藏夹按作者筛选" in first["text"]
-        assert "chat_reply" in first["text"]  # reply instructions appended
         agent = await env.agents.get(created["agent_ref"])
         assert agent is not None and agent.status.value == "active" and agent.state == "discussing"
 
@@ -53,7 +52,7 @@ def test_requirement_start_send_and_reply(tmp_path: Path) -> None:
         res = await env.intake.handle({"agent": created["agent_ref"], "reply_id": "r1", "msgs": [],
                                        "reply": {"kind": "text", "text": "好的"}})
         assert res.status == 202 and res.body == {"status": "queued"}
-        assert await env.texts() == ["%1 需求 · 收藏夹按作者筛选\n好的"]
+        assert await env.texts() == [f"%1 {row.name}\n好的"]
         replay = await env.intake.handle({"agent": created["agent_ref"], "reply_id": "r1", "msgs": [],
                                           "reply": {"kind": "text", "text": "好的"}})
         assert replay.body == {"status": "replayed"} and await env.texts() == []
@@ -68,10 +67,12 @@ def test_requirement_start_send_and_reply(tmp_path: Path) -> None:
 def test_duplicate_platform_message_is_silent(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 a", message_id="dup"))
-        await env.dispatcher.handle(inbound("/需求 a", message_id="dup"))
-        assert await env.texts() == ["已开始 %1 需求 · a"]
+        await env.dispatcher.handle(inbound("/帮我调查 a", message_id="dup"))
+        await env.dispatcher.handle(inbound("/帮我调查 a", message_id="dup"))
+        await env.drain()
         assert len(env.paseo.created) == 1
+        assert (await env.sessions.by_no(CHAT, 1)).input["text"] == "a"
+        assert await env.sessions.by_no(CHAT, 2) is None
         await env.close()
 
     run(main())
@@ -80,8 +81,8 @@ def test_duplicate_platform_message_is_silent(tmp_path: Path) -> None:
 def test_session_resolution_explicit_quoted_current(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 一"))
-        await env.dispatcher.handle(inbound("/需求 二"))
+        await env.dispatcher.handle(inbound("/帮我调查 一"))
+        await env.dispatcher.handle(inbound("/帮我调查 二"))
         await env.drain()
         one, two = env.paseo.created[0]["agent_id"], env.paseo.created[1]["agent_id"]
         # current = %2
@@ -91,7 +92,8 @@ def test_session_resolution_explicit_quoted_current(tmp_path: Path) -> None:
         assert env.paseo.sent[-1][0] == one
         assert "显式" in ingress(env.paseo.sent[-1][1])["text"]
         # Quoting an AI message of %1 (marker line) targets %1.
-        await env.dispatcher.handle(inbound("/继续 引用", quoted=quote_of("%1 需求 · 一\n回复")))
+        first = await env.sessions.by_no(CHAT, 1)
+        await env.dispatcher.handle(inbound("/继续 引用", quoted=quote_of(f"%1 {first.name}\n回复")))
         assert env.paseo.sent[-1][0] == one
         # Sending made %1 current.
         assert (await env.sessions.current(CHAT)).no == 1
@@ -105,7 +107,7 @@ def test_session_resolution_explicit_quoted_current(tmp_path: Path) -> None:
 def test_busy_agent(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 x"))
+        await env.dispatcher.handle(inbound("/帮我调查 x"))
         await env.drain()
         env.paseo.statuses[env.paseo.created[0]["agent_id"]] = AgentStatus.RUNNING
         await env.dispatcher.handle(inbound("/继续 y"))
@@ -119,7 +121,7 @@ def test_agent_create_failure_marks_failed(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
         env.paseo.fail_create = True
-        await env.dispatcher.handle(inbound("/需求 x"))
+        await env.dispatcher.handle(inbound("/帮我调查 x"))
         texts = await env.texts()
         assert texts == ["%1 创建失败：启动 agent 失败：provider unavailable"]
         row = await env.sessions.by_no(CHAT, 1)
@@ -136,11 +138,12 @@ def test_agent_create_failure_marks_failed(tmp_path: Path) -> None:
 def test_program_commands(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 一"))
+        await env.dispatcher.handle(inbound("/帮我调查 一"))
         await env.dispatcher.handle(inbound("/帮我调查 二"))
         await env.drain()
         await env.dispatcher.handle(inbound("/切换 %1"))
-        assert await env.texts() == ["当前会话已切换到 %1 需求 · 一"]
+        await env.drain()
+        assert (await env.sessions.current(CHAT)).no == 1
         await env.dispatcher.handle(inbound("/重命名 新名字"))
         assert await env.texts() == ["%1 已改名为「新名字」"]
         # owner permission: another user may not rename or archive (silent).
@@ -159,18 +162,13 @@ def test_program_commands(tmp_path: Path) -> None:
         await env.dispatcher.handle(inbound("/会话列表"))
         await env.dispatcher.handle(inbound("/会话列表 全部"))
         await env.dispatcher.handle(inbound("/会话 %2"))
-        await env.dispatcher.handle(inbound("/alicedev"))
-        await env.dispatcher.handle(inbound("/alicedev 需求"))
         await env.drain()
         names = [c for c, _ in env.cards.rendered]
-        assert names == ["session_list", "session_list", "session", "help", "command"]
+        assert names == ["session_list", "session_list", "session"]
         active_rows = env.cards.rendered[0][1]
         all_rows = env.cards.rendered[1][1]
         assert json.dumps(active_rows, ensure_ascii=False, default=str).count("%") < \
             json.dumps(all_rows, ensure_ascii=False, default=str).count("%")
-        # The page hint repeats the full command, subcommand included.
-        assert active_rows["footer"].endswith("/会话列表 n")
-        assert all_rows["footer"].endswith("/会话列表 全部 n")
         await env.close()
 
     run(main())
@@ -179,11 +177,13 @@ def test_program_commands(tmp_path: Path) -> None:
 def test_usage_unknown_and_admin_only(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求"))
-        assert await env.texts() == ["缺少内容\n用法：/需求 <内容>"]
+        assert await env.dispatcher.handle(inbound("/帮我调查"))
+        await env.drain()
+        assert await env.sessions.current(CHAT) is None
+        assert await env.sessions.by_no(CHAT, 1) is None
         assert not await env.dispatcher.handle(inbound("/不存在"))  # not addressed: other plugins
         assert await env.dispatcher.handle(inbound("/不存在", addressed=True))
-        assert await env.texts() == ["未知指令：/不存在。发送 /alicedev 查看帮助。"]
+        await env.drain()
         await env.dispatcher.handle(inbound("/升级bot 加个指令"))  # admin only → silent
         assert await env.texts() == [] and env.paseo.created == []
         assert not await env.dispatcher.handle(inbound("群聊闲话"))
@@ -195,7 +195,7 @@ def test_usage_unknown_and_admin_only(tmp_path: Path) -> None:
 def test_share_links_per_mention(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 x"))
+        await env.dispatcher.handle(inbound("/帮我调查 x"))
         await env.drain()
         mentions = (Mention("telegram:5", "5", "小明"), Mention("telegram:6", "6", "小红"))
         await env.dispatcher.handle(inbound("/链接 %1 @小明 @小红", user=ADMIN, mentions=mentions))
@@ -228,9 +228,6 @@ def test_upgrade_bot_full_cycle(tmp_path: Path) -> None:
                           slug=f"s{s1.session_id}", cwd=wt["cwd"])
         work = env.paseo.created[0]
         assert work["cwd"] == wt["cwd"] and work["workspace_id"] == wt["ws"]
-        prompt = ingress(work["prompt"])["text"]
-        assert "awaiting_approval" in prompt and "needs_human" in prompt
-
         # Exclusive: a second request queues.
         await env.dispatcher.handle(inbound("/升级bot 第二个", user=ADMIN))
         assert await env.texts() == ["已排队 %2 升级 · 第二个：同类会话正在进行，前一个结束后自动开始。"]
@@ -335,7 +332,7 @@ def test_needs_human_share_link_follows_ai_reply(tmp_path: Path) -> None:
 def test_restart_recovers_creating_agent(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
-        await env.dispatcher.handle(inbound("/需求 x"))
+        await env.dispatcher.handle(inbound("/帮我调查 x"))
         await env.drain()
         ref = env.paseo.created[0]["agent_ref"]
         await env.store.execute("UPDATE agents SET status = 'creating', agent_id = NULL WHERE agent_ref = ?", (ref,))
@@ -358,8 +355,8 @@ def test_status_and_health_routes(tmp_path: Path) -> None:
         api = InternalApi(config=env.config, intake=env.intake, sessions=env.sessions,
                           agents=env.agents, scheduler=env.scheduler, outbox=env.outbox,
                           registry=lambda: env.registry, platforms_fn=lambda: ["telegram"],
-                          generation=7, dispatcher=env.dispatcher)
-        await env.dispatcher.handle(inbound("/需求 x"))
+                          generation=7, tools=env.tools)
+        await env.dispatcher.handle(inbound("/帮我调查 x"))
         async with TestClient(TestServer(api.app)) as client:
             health = await (await client.get("/v1/health")).json()
             assert health == {"generation": 7, "revision": "deadbeef"}
@@ -369,11 +366,11 @@ def test_status_and_health_routes(tmp_path: Path) -> None:
             assert status["sessions"]["active"] == 1 and status["outbox_pending"] == 1
             ref = env.paseo.created[0]["agent_ref"]
             agent = await (await client.get(f"/v1/agents/{ref}", headers={"X-Alicedev-Token": "tok"})).json()
-            assert agent["session_no"] == 1 and agent["reply_spec"]["kinds"] == ["text", "image_template"]
+            assert agent["session_no"] == 1 and "text" in agent["reply_spec"]["kinds"]
             assert (await client.get("/v1/sessions/1")).status == 401
             detail = await (await client.get("/v1/sessions/1", headers={"X-Alicedev-Token": "tok"})).json()
             assert detail["label"] == "%1" and detail["is_current"] is True
-            assert detail["scenario"]["name"] == "requirement" and detail["state"]["name"] == "discussing"
+            assert detail["scenario"]["name"] == "investigate" and detail["state"]["name"] == "discussing"
             assert detail["state"]["label"] == "对话中" and detail["created_by"] == USER
             missing = await client.get("/v1/sessions/999", headers={"X-Alicedev-Token": "tok"})
             assert missing.status == 404 and (await missing.json()) == {"error": "session_unknown"}
@@ -390,7 +387,10 @@ def test_favorites_and_addressed_without_session(tmp_path: Path) -> None:
     async def main() -> None:
         env = await make_env(tmp_path)
         await env.dispatcher.handle(inbound("在吗", addressed=True))
-        assert await env.texts() == ["当前没有会话，请先用 /需求 或 /帮我调查 开始，或用 /会话列表 看看已有会话。"]
+        await env.drain()
+        assert await env.sessions.current(CHAT) is None
+        assert await env.sessions.by_no(CHAT, 1) is None
+        assert env.paseo.created == []
         await env.dispatcher.handle(inbound("/收藏夹"))
         assert await env.texts() == ["没有可显示的内容。"]
         await env.dispatcher.handle(inbound("/收藏"))

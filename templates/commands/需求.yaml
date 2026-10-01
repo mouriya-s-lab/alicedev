@@ -1,8 +1,8 @@
-# 新开一个 requirement 会话，把群友的需求交给 AI 分析。
+# 保存原始需求记录；不启动 AI、不改变当前会话。
 name: 需求
-type: ai
+type: program
 aliases: [req]
-summary: 提一个需求，AI 分析可行性与范围
+summary: 记录需求及引用上下文，不开启 AI 会话
 usage: /需求 <内容>
 examples:
   - /需求 希望收藏夹支持按作者筛选
@@ -11,6 +11,5 @@ permission: all
 args:
   内容: text
 do:
-  start:
-    scenario: requirement
+  requirement_add:
     text: "{{ 内容 }}"

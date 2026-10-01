@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
-from alicedev.domain import FavoriteView, SessionView
+from alicedev.domain import FavoriteView, RequirementView, SessionView
 from alicedev.dsl.model import (
     AgentState,
     ArgType,
@@ -298,26 +298,22 @@ def session_list_card(
 
 
 def requirements_list_card(
-    rows: Sequence[SessionView],
+    rows: Sequence[RequirementView],
     page: int,
     pages: int,
     *,
-    archived: bool,
     command: str,
-    scenarios: Mapping[str, Scenario] | None = None,
 ) -> Card:
-    del archived
-    scenarios = scenarios or {}
     fields = {
         "title": "需求列表",
-        "subtitle": "每条需求都是一个会话，可用 %n 继续",
         "rows": [
             {
-                "label": row.label,
-                "text": row.name,
-                "author_name": row.created_by,
+                "label": f"#{row.id}",
+                "text": row.text,
+                "author_name": row.author_name,
                 "created_at": _time(row.created_at),
-                "status": state_label(scenarios.get(row.scenario), row.state),
+                "status": row.status,
+                "images": list(row.images),
             }
             for row in rows
         ],
@@ -378,10 +374,9 @@ def status_card(status: BotStatus) -> Card:
     return "bot_status", fields
 
 
-# ``list`` action card name -> builder for session rows (favorites are separate).
+# ``list`` action card name -> builder for session rows (other lists are separate).
 SESSION_LIST_CARDS: Mapping[str, Callable[..., Card]] = {
     "session_list": session_list_card,
-    "requirements_list": requirements_list_card,
 }
 
 

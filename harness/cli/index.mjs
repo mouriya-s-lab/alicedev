@@ -5,8 +5,8 @@ import { randomUUID } from "node:crypto";
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000];
 const USAGE = `Usage:
   alicedev reply --agent <ref> --reply-id <uuid> --msgs <m1,m2> --json '<payload>'
-  alicedev commands --agent <ref>
-  alicedev run --agent <ref> [--chat <chat_key>] [--quote <id>] [--call-id <id>] '<command line>'
+  alicedev tools --agent <ref>
+  alicedev tool <name> --agent <ref> [--call-id <id>] --json '<args>'
 `;
 
 class UsageError extends Error {}
@@ -27,7 +27,7 @@ function isObject(value) {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function parseFlags(argv, allowed) {
+function parseFlags(argv, allowed, rejectDuplicates = false) {
 	const values = new Map();
 	const positional = [];
 	for (let index = 0; index < argv.length; index += 1) {
@@ -38,6 +38,7 @@ function parseFlags(argv, allowed) {
 		}
 		const key = arg.slice(2);
 		if (!allowed.has(key)) throw new UsageError(`unknown argument: ${arg}`);
+		if (rejectDuplicates && values.has(key)) throw new UsageError(`duplicate argument: ${arg}`);
 		const value = argv[index + 1];
 		if (value === undefined || value.startsWith("--")) throw new UsageError(`missing value for ${arg}`);
 		values.set(key, value);
@@ -81,29 +82,32 @@ function parseReply(argv) {
 	return request;
 }
 
-function parseCommands(argv) {
-	const { values, positional } = parseFlags(argv, new Set(["agent"]));
+function parseTools(argv) {
+	const { values, positional } = parseFlags(argv, new Set(["agent"]), true);
 	if (positional.length > 0) throw new UsageError(`unexpected argument: ${positional[0]}`);
 	const agent = required(values, "agent");
-	if (agent.length === 0) throw new UsageError("--agent must not be empty");
+	if (agent.trim().length === 0) throw new UsageError("--agent must not be empty");
 	return agent;
 }
 
-function parseRun(argv) {
-	const { values, positional } = parseFlags(argv, new Set(["agent", "chat", "quote", "call-id"]));
+function parseTool(argv) {
+	const { values, positional } = parseFlags(argv, new Set(["agent", "call-id", "json"]), true);
 	const agent = required(values, "agent");
-	if (agent.length === 0) throw new UsageError("--agent must not be empty");
-	if (positional.length !== 1 || positional[0].trim() === "") {
-		throw new UsageError("run requires one non-empty command line argument");
+	if (agent.trim().length === 0) throw new UsageError("--agent must not be empty");
+	if (positional.length !== 1 || !/^[a-z][a-z_]*$/.test(positional[0])) {
+		throw new UsageError("tool requires one name containing lowercase letters and underscores");
 	}
-	const request = {
-		agent,
-		call_id: values.get("call-id") ?? randomUUID(),
-		text: positional[0],
-	};
-	if (values.has("chat")) request.chat = values.get("chat");
-	if (values.has("quote")) request.quote = values.get("quote");
-	return request;
+	const raw = required(values, "json");
+	let args;
+	try {
+		args = JSON.parse(raw);
+	} catch {
+		throw new UsageError("--json must contain valid JSON");
+	}
+	if (!isObject(args)) throw new UsageError("--json must be an object");
+	const callId = values.get("call-id") ?? randomUUID();
+	if (callId.trim().length === 0) throw new UsageError("--call-id must not be empty");
+	return { name: positional[0], request: { agent, call_id: callId, args } };
 }
 
 function sleep(milliseconds) {
@@ -215,9 +219,9 @@ async function requestJson(path, { method = "GET", body, budgetMs, successStatus
 	}
 }
 
-async function runCommand(argv) {
-	const request = parseRun(argv);
-	const result = await requestJson("/v1/commands", {
+async function invokeTool(argv) {
+	const { name, request } = parseTool(argv);
+	const result = await requestJson(`/v1/tools/${encodeURIComponent(name)}`, {
 		method: "POST",
 		body: request,
 		budgetMs: 120_000,
@@ -232,10 +236,10 @@ async function runCommand(argv) {
 	return 0;
 }
 
-async function listCommands(argv) {
-	const agent = parseCommands(argv);
+async function listTools(argv) {
+	const agent = parseTools(argv);
 	const query = new URLSearchParams({ agent });
-	const result = await requestJson(`/v1/commands?${query}`, {
+	const result = await requestJson(`/v1/tools?${query}`, {
 		budgetMs: 30_000,
 		successStatus: 200,
 		isSuccess: isObject,
@@ -266,7 +270,10 @@ async function reply(argv) {
 }
 
 async function main(argv) {
-	if (argv.includes("--help")) {
+	if (
+		(argv.length === 1 && argv[0] === "--help") ||
+		(argv.length === 2 && ["reply", "tools", "tool"].includes(argv[0]) && argv[1] === "--help")
+	) {
 		process.stdout.write(USAGE);
 		return 0;
 	}
@@ -275,10 +282,10 @@ async function main(argv) {
 	switch (command) {
 		case "reply":
 			return reply(args);
-		case "commands":
-			return listCommands(args);
-		case "run":
-			return runCommand(args);
+		case "tools":
+			return listTools(args);
+		case "tool":
+			return invokeTool(args);
 		default:
 			throw new UsageError(`unknown command: ${command}`);
 	}

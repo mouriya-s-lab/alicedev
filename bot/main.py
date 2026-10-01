@@ -29,6 +29,7 @@ from astrbot.core.message.message_event_result import MessageChain  # noqa: E402
 
 from alicedev import dsl_api  # noqa: E402
 from alicedev.actions.executor import Dispatcher  # noqa: E402
+from alicedev.agent_tools.service import ToolService  # noqa: E402
 from alicedev.api.intake import ReplyIntake  # noqa: E402
 from alicedev.api.server import InternalApi  # noqa: E402
 from alicedev.config import PluginConfig  # noqa: E402
@@ -45,10 +46,12 @@ from alicedev.reports import ReportPublisher  # noqa: E402
 from alicedev.scheduler.engine import Scheduler  # noqa: E402
 from alicedev.status import BotStatus  # noqa: E402
 from alicedev.store.agents_repo import AgentsRepo  # noqa: E402
+from alicedev.store import cutover_v5  # noqa: E402
 from alicedev.store.db import Store  # noqa: E402
 from alicedev.store.exchanges_repo import ExchangesRepo  # noqa: E402
 from alicedev.store.favorites_repo import FavoritesRepo  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
+from alicedev.store.requirements_repo import RequirementsRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
 
 _LOG = logging.getLogger("alicedev")
@@ -122,11 +125,19 @@ class AliceDevPlugin(Star):
         messages = MessagesRepo(store)
         favorites = FavoritesRepo(store)
         exchanges = ExchangesRepo(store)
+        requirements = RequirementsRepo(store)
 
         paseo = CliPaseoControl(
             container=config.paseo_container, paseo_bin=config.paseo_bin,
             docker_bin=config.docker_bin,
         )
+        try:
+            cutover = await cutover_v5.run(store, paseo)
+        except BaseException:
+            await store.close()
+            self._store = None
+            raise
+        _LOG.info("v5 cutover: %s", cutover)
         actor = AgentActor(store=store, agents=agents, messages=messages, paseo=paseo, config=config)
         renderer = OutboxRenderer(config=config, cards=CardRenderer(self, config.templates_root))
         outbox = Outbox(store=store, renderer=renderer, sender=_ContextSender(self.context))
@@ -138,6 +149,13 @@ class AliceDevPlugin(Star):
             registry=self._current_registry,
         )
         self._scheduler = scheduler
+        github = GithubClient(config.github_token, config.default_repo)
+        tools = ToolService(
+            store=store, config=config, sessions=sessions, agents=agents,
+            requirements=requirements, favorites=favorites, exchanges=exchanges,
+            scheduler=scheduler, paseo=paseo, gateway=gateway, github=github,
+            status_fn=self._bot_status,
+        )
         intake = ReplyIntake(
             store=store, sessions=sessions, agents=agents, outbox=outbox,
             reports=ReportPublisher(store=store, config=config), renderer=renderer,
@@ -145,15 +163,14 @@ class AliceDevPlugin(Star):
         )
         self._dispatcher = Dispatcher(
             config=config, store=store, sessions=sessions, favorites=favorites,
-            scheduler=scheduler, outbox=outbox,
-            github=GithubClient(config.github_token, config.default_repo),
-            registry=self._current_registry, agents=agents, exchanges=exchanges,
+            requirements=requirements, scheduler=scheduler, outbox=outbox,
+            github=github, registry=self._current_registry,
             status_fn=self._bot_status,
         )
         self._api = InternalApi(
             config=config, intake=intake, sessions=sessions, agents=agents, scheduler=scheduler,
             outbox=outbox, registry=self._current_registry, platforms_fn=self._platform_names,
-            generation=_next_generation(data_dir), dispatcher=self._dispatcher,
+            generation=_next_generation(data_dir), tools=tools,
         )
         self._sweeper = IdleSweeper(
             agents=agents, actor=actor, config=config,
@@ -181,6 +198,7 @@ class AliceDevPlugin(Star):
 
     async def terminate(self) -> None:
         # Stop accepting replies → sweeper → scheduler tasks → outbox worker → store.
+        self._dispatcher = None
         if self._api is not None:
             await self._api.stop()
         if self._sweeper is not None:

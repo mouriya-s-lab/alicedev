@@ -36,7 +36,7 @@ class AgentHandle:
 
 @dataclass(frozen=True)
 class LiveAgent:
-    """An agent that holds a resident runtime in paseo (``paseo ls``, not closed)."""
+    """A global-visible paseo agent with non-closed status; not an exhaustive PID inventory."""
 
     agent_id: str
     status: AgentStatus
@@ -98,6 +98,14 @@ class PaseoControl(abc.ABC):
 
     @abc.abstractmethod
     async def archive(self, agent_id: str) -> None: ...
+
+    @abc.abstractmethod
+    async def is_archived(self, agent_id: str) -> bool:
+        """Read the explicit archive fact from inspect; closed status is not enough."""
+
+    @abc.abstractmethod
+    async def all_agent_ids(self) -> list[str]:
+        """Global visible inventory including archived records; not a storage/lifecycle proof."""
 
     @abc.abstractmethod
     async def workspace_local(self, path: str, title: str) -> WorkspaceRef:

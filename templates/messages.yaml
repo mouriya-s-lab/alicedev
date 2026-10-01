@@ -21,6 +21,8 @@ send.busy: "%{{ session.no }} 的 AI 还在处理上一条消息，稍后再试�
 send.full: "%{{ session.no }} 暂时唤醒不了：在线会话已满，稍后再试。"
 
 # --- 程序指令 ---
+requirement_add.ok: "已记录需求 #{{ id }}"
+requirement_add.image_failed: "记录需求失败：消息或引用中的图片无法下载。"
 session_show.not_found: "找不到这个会话。可以用 /会话列表 查看本群会话。"
 session_switch.ok: "当前会话已切换到 %{{ session.no }} {{ session.name }}"
 session_switch.not_found: "找不到这个会话。"

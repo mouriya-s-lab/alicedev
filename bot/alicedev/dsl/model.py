@@ -13,6 +13,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Mapping, Union
 
+from alicedev.agent_tools.model import ToolName
+
 
 # --- source locations & errors ---------------------------------------------
 
@@ -72,6 +74,7 @@ class ArgType(str, Enum):
 class ListSource(str, Enum):
     SESSIONS = "sessions"
     FAVORITES = "favorites"
+    REQUIREMENTS = "requirements"
 
 
 class RouteWhen(str, Enum):
@@ -155,6 +158,11 @@ class FavoriteAction:
 
 
 @dataclass(frozen=True)
+class RequirementAddAction:
+    text: Tmpl
+
+
+@dataclass(frozen=True)
 class ListAction:
     source: ListSource
     card: str
@@ -189,6 +197,7 @@ Action = Union[
     HumanAction,
     ShareAction,
     FavoriteAction,
+    RequirementAddAction,
     ListAction,
     ChatsAction,
     StatusAction,
@@ -197,18 +206,6 @@ Action = Union[
 
 AI_ACTIONS: tuple[type, ...] = (StartAction, GithubAction, SendAction)
 
-# Actions an agent may invoke through ``alicedev run`` (§3.2 "agent 可调用").
-AGENT_ACTIONS: tuple[type, ...] = (
-    StartAction,
-    GithubAction,
-    SessionShowAction,
-    SessionRenameAction,
-    SessionArchiveAction,
-    FavoriteAction,
-    ListAction,
-    ChatsAction,
-    StatusAction,
-)
 
 # Fixed result keys per action (``say`` may only override these).
 RESULT_KEYS: Mapping[type, tuple[str, ...]] = {
@@ -222,6 +219,7 @@ RESULT_KEYS: Mapping[type, tuple[str, ...]] = {
     HumanAction: ("ok", "not_found", "not_allowed"),
     ShareAction: ("ok", "not_found", "not_ready"),
     FavoriteAction: ("ok", "image_failed"),
+    RequirementAddAction: ("ok", "image_failed"),
     ListAction: ("empty",),
     ChatsAction: (),
     StatusAction: (),
@@ -289,7 +287,7 @@ Workdir = Union[CwdWorkdir, RepoWorkdir]
 
 class Audience(str, Enum):
     ALL = "all"
-    ADMIN = "admin"  # admin-only input; may list admin commands and act on other chats (§3.4)
+    ADMIN = "admin"  # admin-only input; may use admin tools and target other chats (§3.4)
 
 
 @dataclass(frozen=True)
@@ -300,7 +298,7 @@ class AgentState:
     next: tuple[str, ...] = ()
     data: tuple[str, ...] = ()
     share: bool = False
-    agent_commands: tuple[str, ...] = ()  # command paths ("会话列表 全部") callable via alicedev run
+    tools: tuple[ToolName, ...] = ()
 
     @property
     def conversational(self) -> bool:

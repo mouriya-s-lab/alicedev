@@ -1,8 +1,8 @@
 """Internal HTTP API server (ARCHITECTURE §6).
 
 Runs inside the plugin process on the docker network (``X-Alicedev-Token``):
-``/v1/reply`` (enqueue), ``/v1/agents/{agent}``, ``/v1/sessions/{session_id}``, ``/v1/status``,
-``/v1/health``,
+``/v1/reply`` (enqueue), ``/v1/tools`` (discover/invoke), ``/v1/agents/{agent}``,
+``/v1/sessions/{session_id}``, ``/v1/status``, ``/v1/health``,
 plus the ``initialize``/``terminate`` draining lifecycle.
 """
 
@@ -10,19 +10,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import time
 from dataclasses import asdict
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from aiohttp import web
 
-from alicedev.actions.executor import AgentCall
+from alicedev.agent_tools.model import ToolFailure
+from alicedev.agent_tools.parser import parse_tool_request
+from alicedev.agent_tools.results import ToolDiscovery
+from alicedev.agent_tools.service import ToolService
 from alicedev.dsl.model import AgentState, Registry
+from alicedev.domain import JsonValue
 from alicedev.render import views
 from alicedev.status import BotStatus, collect_status, status_json
 
 if TYPE_CHECKING:
-    from alicedev.actions.executor import Dispatcher
     from alicedev.api.intake import ReplyIntake
     from alicedev.config import PluginConfig
     from alicedev.outbox.service import Outbox
@@ -56,11 +61,11 @@ class InternalApi:
         registry: Callable[[], Registry],
         platforms_fn: Callable[[], list[str]],
         generation: int,
-        dispatcher: "Dispatcher",
+        tools: ToolService,
     ) -> None:
         self._config = config
         self._intake = intake
-        self._dispatcher = dispatcher
+        self._tools = tools
         self._sessions = sessions
         self._agents = agents
         self._scheduler = scheduler
@@ -74,8 +79,8 @@ class InternalApi:
         self._app.add_routes(
             [
                 web.post("/v1/reply", self._handle_reply),
-                web.get("/v1/commands", self._handle_commands),
-                web.post("/v1/commands", self._handle_run),
+                web.get("/v1/tools", self._handle_tools),
+                web.post("/v1/tools/{name}", self._handle_tool),
                 web.get("/v1/agents/{agent}", self._handle_agent),
                 web.get("/v1/sessions/{session_id}", self._handle_session),
                 web.get("/v1/status", self._handle_status),
@@ -203,45 +208,51 @@ class InternalApi:
         result = await self._intake.handle(body)
         return web.json_response(dict(result.body), status=result.status)
 
-    async def _handle_commands(self, request: web.Request) -> web.StreamResponse:
+    async def _handle_tools(self, request: web.Request) -> web.StreamResponse:
         agent_ref = request.query.get("agent")
-        if not agent_ref:
+        if request.query.keys() != {"agent"} or len(request.query.getall("agent", [])) != 1 or not agent_ref or not agent_ref.strip():
             return web.json_response({"error": "invalid_payload"}, status=400)
-        result = await self._dispatcher.agent_commands(agent_ref)
-        return web.json_response(dict(result.body), status=result.status)
+        result = await self._tools.discover(agent_ref)
+        if isinstance(result, ToolFailure):
+            return web.json_response({"error": result.error.value}, status=result.status)
+        return web.json_response(_discovery_json(result))
 
-    async def _handle_run(self, request: web.Request) -> web.StreamResponse:
+    async def _handle_tool(self, request: web.Request) -> web.StreamResponse:
         try:
             body = await request.json()
-        except Exception:  # noqa: BLE001
+        except (ValueError, UnicodeDecodeError):
             return web.json_response({"error": "invalid_payload"}, status=400)
-        if not isinstance(body, dict):
-            return web.json_response({"error": "invalid_payload"}, status=400)
+        parsed = parse_tool_request(request.match_info["name"], body)
+        result = parsed if isinstance(parsed, ToolFailure) else await self._tools.invoke(parsed)
+        if isinstance(result, ToolFailure):
+            return web.json_response({"error": result.error.value}, status=result.status)
+        return web.json_response(asdict(result), dumps=_tool_dumps)
 
-        agent_ref = body.get("agent")
-        call_id = body.get("call_id")
-        text = body.get("text")
-        chat_key = body.get("chat")
-        quote = body.get("quote")
-        if (
-            not isinstance(agent_ref, str)
-            or not agent_ref
-            or not isinstance(call_id, str)
-            or not call_id
-            or not isinstance(text, str)
-            or not text
-            or ("chat" in body and not isinstance(chat_key, str))
-            or ("quote" in body and not isinstance(quote, str))
-        ):
-            return web.json_response({"error": "invalid_payload"}, status=400)
 
-        result = await self._dispatcher.run_agent(
-            AgentCall(
-                agent_ref=agent_ref,
-                call_id=call_id,
-                text=text,
-                chat_key=chat_key,
-                quote=quote,
-            )
-        )
-        return web.json_response(dict(result.body), status=result.status)
+def _tool_dumps(value: JsonValue) -> str:
+    def encode(item: object) -> str:
+        if isinstance(item, datetime):
+            return item.isoformat()
+        raise TypeError(f"unsupported tool JSON type {type(item).__name__}")
+    return json.dumps(value, ensure_ascii=False, default=encode)
+
+
+def _discovery_json(discovery: ToolDiscovery) -> dict[str, JsonValue]:
+    tools: list[JsonValue] = []
+    for spec in discovery.tools:
+        properties: dict[str, JsonValue] = {}
+        required: list[JsonValue] = []
+        for parameter in spec.parameters:
+            schema: dict[str, JsonValue] = {"type": parameter.kind}
+            if parameter.kind == "integer":
+                schema["minimum"] = 1
+            elif parameter.kind == "string":
+                schema["minLength"] = 1
+            properties[parameter.name] = schema
+            if parameter.required:
+                required.append(parameter.name)
+        tools.append({"name": spec.name.value, "summary": spec.summary,
+                      "input_schema": {"type": "object", "properties": properties,
+                                       "required": required, "additionalProperties": False}})
+    return {"agent": discovery.agent, "session_no": discovery.session_no,
+            "chat_key": discovery.chat_key, "tools": tools}

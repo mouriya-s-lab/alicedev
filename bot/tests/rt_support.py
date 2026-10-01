@@ -16,9 +16,11 @@ if str(ROOT / "bot") not in sys.path:
 from alicedev import dsl_api  # noqa: E402
 from alicedev.actions.executor import Dispatcher  # noqa: E402
 from alicedev.actions.inbound import Inbound, Mention, QuotedMessage  # noqa: E402
+from alicedev.agent_tools.service import ToolService  # noqa: E402
 from alicedev.api.intake import ReplyIntake  # noqa: E402
 from alicedev.config import PluginConfig  # noqa: E402
 from alicedev.gateway_client import IssuedToken  # noqa: E402
+from alicedev.github.client import GithubClient  # noqa: E402
 from alicedev.outbox.render import OutboxRenderer  # noqa: E402
 from alicedev.outbox.service import Outbox  # noqa: E402
 from alicedev.paseo.agent_actor import AgentActor  # noqa: E402
@@ -39,6 +41,7 @@ from alicedev.store.db import Store  # noqa: E402
 from alicedev.store.exchanges_repo import ExchangesRepo  # noqa: E402
 from alicedev.store.favorites_repo import FavoritesRepo  # noqa: E402
 from alicedev.store.messages_repo import MessagesRepo  # noqa: E402
+from alicedev.store.requirements_repo import RequirementsRepo  # noqa: E402
 from alicedev.store.sessions_repo import SessionsRepo  # noqa: E402
 
 TEMPLATES = ROOT / "templates"
@@ -130,6 +133,9 @@ class FakePaseo(PaseoControl):
     async def status(self, agent_id):
         return self.statuses.get(agent_id, AgentStatus.IDLE)
 
+
+    async def all_agent_ids(self):
+        return list(self.statuses)
     async def live_agents(self):
         if self.fail_live:
             raise PaseoError("paseo ls unavailable")
@@ -144,6 +150,9 @@ class FakePaseo(PaseoControl):
 
     async def archive(self, agent_id):
         self.archived.append(agent_id)
+
+    async def is_archived(self, agent_id):
+        return agent_id in self.archived
 
     async def workspace_local(self, path, title):
         ws = self._next("wsl")
@@ -228,6 +237,7 @@ class Env:
     sessions: SessionsRepo
     agents: AgentsRepo
     messages: MessagesRepo
+    requirements: RequirementsRepo
     paseo: FakePaseo
     gateway: FakeGateway
     sender: FakeSender
@@ -236,6 +246,7 @@ class Env:
     scheduler: Scheduler
     intake: ReplyIntake
     dispatcher: Dispatcher
+    tools: ToolService
     registry: Any
     _texts: list[str] = field(default_factory=list)
 
@@ -273,6 +284,10 @@ async def make_env(tmp: Path, *, templates: Path = TEMPLATES) -> Env:
     store = Store(str(tmp / "alicedev.duckdb"))
     await store.open()
     sessions, agents, messages = SessionsRepo(store), AgentsRepo(store), MessagesRepo(store)
+    requirements = RequirementsRepo(store)
+    favorites = FavoritesRepo(store)
+    exchanges = ExchangesRepo(store)
+    github = GithubClient(token=config.github_token, default_repo=config.default_repo)
     paseo = FakePaseo()
     paseo.git_overrides.update(GIT_NO_MARKERS)
     gateway = FakeGateway()
@@ -299,12 +314,21 @@ async def make_env(tmp: Path, *, templates: Path = TEMPLATES) -> Env:
         )
 
     dispatcher = Dispatcher(
-        config=config, store=store, sessions=sessions, favorites=FavoritesRepo(store),
-        scheduler=scheduler, outbox=outbox, github=None, registry=lambda: registry,
-        agents=agents, exchanges=ExchangesRepo(store), status_fn=status_fn,
+        config=config, store=store, sessions=sessions, favorites=favorites, requirements=requirements,
+        scheduler=scheduler, outbox=outbox, github=github, registry=lambda: registry,
+        status_fn=status_fn,
     )
-    return Env(tmp, config, store, sessions, agents, messages, paseo, gateway, sender, cards,
-               outbox, scheduler, intake, dispatcher, registry)
+    tools = ToolService(
+        store=store, config=config, sessions=sessions, agents=agents, requirements=requirements,
+        favorites=favorites, exchanges=exchanges, scheduler=scheduler, paseo=paseo,
+        gateway=gateway, github=github, status_fn=status_fn,  # type: ignore[arg-type]
+    )
+    return Env(
+        tmp=tmp, config=config, store=store, sessions=sessions, agents=agents, messages=messages,
+        requirements=requirements, paseo=paseo, gateway=gateway, sender=sender, cards=cards,
+        outbox=outbox, scheduler=scheduler, intake=intake, dispatcher=dispatcher, tools=tools,
+        registry=registry,
+    )
 
 
 _MSG = 0

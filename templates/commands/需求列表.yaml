@@ -1,4 +1,4 @@
-# 列出本群的需求（requirement 场景的会话，含已结束的）。
+# 本群的独立需求记录，与会话列表、收藏夹分开。
 name: 需求列表
 type: program
 aliases: [requirements]
@@ -12,8 +12,6 @@ args:
   页: page
 do:
   list:
-    source: sessions
-    scenario: requirement
-    archived: true
+    source: requirements
     card: requirements_list
     page: 页

@@ -127,12 +127,32 @@ class CliPaseoControl(PaseoControl):
         except cli_json.CliShapeError as exc:
             raise PaseoError(str(exc)) from exc
 
-    async def live_agents(self) -> list[LiveAgent]:
-        doc = await self._paseo_json("ls")
+    async def is_archived(self, agent_id: str) -> bool:
+        doc = await self._paseo_json("inspect", agent_id)
+        try:
+            return cli_json.inspect_archived(doc)
+        except cli_json.CliShapeError as exc:
+            raise PaseoError(str(exc)) from exc
+
+    async def all_agent_ids(self) -> list[str]:
+        doc = await self._paseo_json("ls", "-a", "-g")
         try:
             pairs = cli_json.ls_agents(doc)
         except cli_json.CliShapeError as exc:
             raise PaseoError(str(exc)) from exc
+        # The CLI discards server pagination metadata and cannot request a next page.
+        if len(pairs) >= 200:
+            raise PaseoError("cutover inventory may be truncated at the server's 200-agent page limit")
+        return [agent_id for agent_id, _ in pairs]
+
+    async def live_agents(self) -> list[LiveAgent]:
+        doc = await self._paseo_json("ls", "-g")
+        try:
+            pairs = cli_json.ls_agents(doc)
+        except cli_json.CliShapeError as exc:
+            raise PaseoError(str(exc)) from exc
+        if len(pairs) >= 200:
+            raise PaseoError("live inventory may be truncated at the server's 200-agent page limit")
         return [LiveAgent(agent_id=i, status=s) for i, s in pairs if s is not AgentStatus.CLOSED]
 
     async def park(self, agent_id: str) -> None:
