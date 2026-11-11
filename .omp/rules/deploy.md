@@ -111,7 +111,7 @@ make -C /srv/alicedev/app fixed-main
 改凭据：`sops -d --extract '["alicedev_deploy_env_b64"]' … | base64 -d` 解出、修改、`base64` 编码后用 `sops --set` 写回，提交 nekoringo-iac，再 apply：
 
 ```sh
-cd ~/Ext/code/nekoringo-iac/apps/alicedev
+cd ~/Ext/code/iac/nekoringo-iac/apps/alicedev
 # terraform.tfvars: alicedev_revision = <已提交的 alicedev SHA>
 tofu plan && tofu apply
 ```
