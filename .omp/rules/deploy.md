@@ -115,11 +115,15 @@ make -C /srv/alicedev/app fixed-main
 #    与 BAO_EXEC_AUTH=approle、BAO_ROLE_ID_FILE/BAO_SECRET_ID_FILE
 umask 077
 envfile=$(mktemp)
+set -o pipefail    # 少了它，bao-exec 失败时 base64 -d 仍 rc=0，下面的检查会放过一个空文件
 bao-exec run --path kv/mouriya-devops/nekoringo-iac/ops -- bash -c 'printf %s "$alicedev_deploy_env_b64"' | base64 -d > "$envfile"
+rc=$?
+[ "$rc" -eq 0 ] && [ -s "$envfile" ] || { rm -f "$envfile"; echo "取出失败（rc=$rc）或结果为空：停止，不进入写回" >&2; exit 1; }
 
 # 2. 改 "$envfile"（编辑器，或脚本只重写要变的那几行）
 
-# 3. 写回：`bao` 只接受单个地址，别再给它逗号列表
+# 3. 写回：`bao` 只接受单个地址，别再给它逗号列表。空内容写回会清空线上 `.env`，所以先验一遍
+[ -s "$envfile" ] || { echo "临时文件为空：停止，不写回" >&2; exit 1; }
 export BAO_ADDR=http://homelab-bao1.mouriya.lan:8200
 bao login -method=oidc            # Keycloak 不可用：bao login -method=userpass username=breakglass
 base64 < "$envfile" | tr -d '\n' | bao kv patch kv/mouriya-devops/nekoringo-iac/ops alicedev_deploy_env_b64=-
