@@ -17,7 +17,7 @@ alwaysApply: false
 6. **先体检再部署**（§3）。宿主 `/tmp` 是约 3.9G 的 tmpfs，占用的是内存（8G 内存、无 swap）；`/tmp` 写满后 runc 无法 `docker exec`：所有 healthcheck 失败，bot 的 `paseoctl` shim 失效，`deployrun` 也跑不起来。
 7. **宿主上不留临时进程和大文件**：抓包、构建产物、下载的安装包不写 `/tmp`，用完即停、即删。删掉仍被进程打开的文件不会释放空间，要停掉进程。2026-09-25 的事故就是这样：一个孤儿 `tcpdump -w /tmp/…pcap` 跑了 5 天，写满 `/tmp`，全部容器 unhealthy。
 8. **核验后才算上线**（§5）。只看到命令退出码为 0 不算上线。
-9. **凭据**只来自 SOPS → IaC 落地的 `/srv/alicedev/deploy/.env`；不粘进对话、不进 argv。
+9. **凭据**只来自 OpenBao → IaC 落地的 `/srv/alicedev/deploy/.env`；不粘进对话、不进 argv。
 
 ## 2. 宿主布局与所有权
 
@@ -53,7 +53,7 @@ docker exec -u paseo alicedev-paseo /deploy/app/tools/deployctl status --app /de
 | `deploy/`（compose、astrbot 种子配置） | 提交 → IaC apply（§6）→ `make -C /srv/alicedev/app up`。astrbot 配置只播种（ARCHITECTURE §11）：`up` 不改数据卷里已有的 `cmd_config.json`、`config/alicedev_config.json`；管理员名单、平台、插件配置的改动按 `docs/runbook.md` §4 在 AstrBot 里做 |
 | `deploy/paseo`、`deploy/astrbot` Dockerfile、`harness/` | 宿主检出切到新 SHA（`deployctl apply`）→ 打回滚标签 → `make -C /srv/alicedev/app build` → `make -C /srv/alicedev/app up` |
 | `gateway/` | 宿主检出切到新 SHA（同时改了 `bot/` 时，先按第一行跑 `deployrun`，它会一并切检出）→ `docker tag` 当前镜像为 `alicedev/gateway:rollback-<tag>` → `docker compose … build gateway` → `docker compose … up -d --no-deps gateway`。不动 paseo；重启网关会使尚未兑换的一次性链接失效 |
-| paseo 上游版本 | 改 `PASEO_SRC_REF`（SOPS）→ IaC apply（§6）→ `make paseo-src` → 打回滚标签 → `build` → `up` → 按 §5 重新核对分享视图 |
+| paseo 上游版本 | 改 `PASEO_SRC_REF`（OpenBao）→ IaC apply（§6）→ `make paseo-src` → 打回滚标签 → `build` → `up` → 按 §5 重新核对分享视图 |
 
 ### typed tools 与 schema v5 协同切换
 
@@ -102,15 +102,30 @@ make -C /srv/alicedev/app fixed-main
 
 ## 6. 凭据与 IaC
 
-凭据全部在 `nekoringo-iac/_shared/secrets/secrets.sops.yaml` 的 `alicedev_deploy_env_b64` 里（整份 `.env` 的 base64），由 IaC 落到 `/srv/alicedev/deploy/.env`（0600）。键见 `deploy/.env.example`。其中：
+凭据的权威是 OpenBao 路径 `kv/mouriya-devops/nekoringo-iac/ops` 的字段 `alicedev_deploy_env_b64`（整份 `.env` 的 base64）。`nekoringo-iac/apps/alicedev` 经 `bao-exec` 读出该字段，预览、渲染并原子装到 `/srv/alicedev/deploy/.env`（0600）。键见 `deploy/.env.example`。其中：
 
 - `GITHUB_TOKEN`：RiriAgent token，供宿主检出 fetch、paseo 里 agent 的 git/gh 使用。
-- `ASTRBOT_API_KEY`：AstrBot 插件权限 API key，`deployctl` 热重载时用它认证。生成方式：在 astrbot 容器内调用 AstrBot 自己的 `ApiKeyService.create_api_key({"name": "deployctl", "scopes": ["plugin"]})`（作用于 `/AstrBot/data/data_v4.db`），只把 `abk_…` 写进 root-only 文件，再写入 SOPS。AstrBot 的日志也写 stdout，不要把整段输出当成 key。
+- `ASTRBOT_API_KEY`：AstrBot 插件权限 API key，`deployctl` 热重载时用它认证。生成方式：在 astrbot 容器内调用 AstrBot 自己的 `ApiKeyService.create_api_key({"name": "deployctl", "scopes": ["plugin"]})`（作用于 `/AstrBot/data/data_v4.db`），只把 `abk_…` 写进 root-only 文件，再按下面的流程写回 OpenBao。AstrBot 的日志也写 stdout，不要把整段输出当成 key。
 - `E2E_DASHBOARD_PASSWORD`：e2e 栈 WebChat 的登录密码。
 
-改凭据：`sops -d --extract '["alicedev_deploy_env_b64"]' … | base64 -d` 解出、修改、`base64` 编码后用 `sops --set` 写回，提交 nekoringo-iac，再 apply：
+改凭据：用 `bao-exec`（工作站 approle 身份，只读）取出当前 `.env` 到 0600 临时文件，改完 base64 后以 `admin` token `bao kv patch` 写回，删掉临时文件，再在 nekoringo-iac 跑 `apps/alicedev` 的 apply。approle 只给读取用，写回必须是 admin token。
 
 ```sh
+# 1. 取出：明文只落在 0600 临时文件，不进终端。工作站环境提供 BAO_ADDR（可逗号列多个）
+#    与 BAO_EXEC_AUTH=approle、BAO_ROLE_ID_FILE/BAO_SECRET_ID_FILE
+umask 077
+envfile=$(mktemp)
+bao-exec run --path kv/mouriya-devops/nekoringo-iac/ops -- bash -c 'printf %s "$alicedev_deploy_env_b64"' | base64 -d > "$envfile"
+
+# 2. 改 "$envfile"（编辑器，或脚本只重写要变的那几行）
+
+# 3. 写回：`bao` 只接受单个地址，别再给它逗号列表
+export BAO_ADDR=http://homelab-bao1.mouriya.lan:8200
+bao login -method=oidc            # Keycloak 不可用：bao login -method=userpass username=breakglass
+base64 < "$envfile" | tr -d '\n' | bao kv patch kv/mouriya-devops/nekoringo-iac/ops alicedev_deploy_env_b64=-
+rm -f "$envfile"
+
+# 4. 落地：apply 读到新字段即重装宿主 `.env`（digest 覆盖其内容）
 cd ~/Ext/code/devops/nekoringo-iac/apps/alicedev
 # terraform.tfvars: alicedev_revision = <已提交的 alicedev SHA>
 tofu plan && tofu apply
