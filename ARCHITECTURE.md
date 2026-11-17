@@ -16,7 +16,7 @@ AstrBot 插件把群聊指令分成两类：**程序指令**直接管理需求�
    - **传输**：入站把平台消息交给指令或路由；出站是消息队列，AI 与 bot 自己入队，平台适配器出队发送，入队与出队互不等待（§6）。
    - **调度**：会话状态机，按场景定义起 agent、推进状态；声明独占的场景一次只处理一个会话（§7）。
    - **可见性**：只有场景声明为可见的状态进入聊天面，其余全部内部。
-4. **IaC 只声明与 provision 宿主文件，与运行时彻底解耦**：`nekoringo-iac/apps/alicedev`（OpenTofu）只把 `deploy/` 与 SOPS 注入的 `deploy/.env` 从一个 committed alicedev revision 落到 `/srv/alicedev`；`tofu apply` 成功 = 文件落地，**绝不**跑 `docker compose`、判容器健康、验 QQ 在线。运行时 bring-up 与健康监控是另一层 owner；bot 代码与 DSL（`bot/`、`templates/`）由 `deployctl` 拥有、不进 IaC 托管集（§11）。
+4. **IaC 只声明与 provision 宿主文件，与运行时彻底解耦**：`nekoringo-iac/apps/alicedev`（OpenTofu）只把 `deploy/` 与经 `bao-exec` 从 OpenBao 取出的 `deploy/.env` 从一个 committed alicedev revision 落到 `/srv/alicedev`；`tofu apply` 成功 = 文件落地，**绝不**跑 `docker compose`、判容器健康、验 QQ 在线。运行时 bring-up 与健康监控是另一层 owner；bot 代码与 DSL（`bot/`、`templates/`）由 `deployctl` 拥有、不进 IaC 托管集（§11）。
 5. **DSL 驱动，不写死指令**：指令、消息路由、场景、用户可见的固定文字全部在 `templates/` 的 YAML DSL 里声明（§3）；代码只实现有限的动作、参数类型和卡片渲染。新增或修改指令 = 改 DSL 文件，不改代码。
 
 ## 1. 进程与容器（nekoringo2）
@@ -567,7 +567,7 @@ tokens_issued(token_id PK, session_id, user_key, issued_by, target, issued_at, e
 - **typed tools 协同发布**：协议与数据切换不能走自动回滚的 deployrun。先从独立目标SHA context构建paseo overlay，既有ALICEDEV_APP_DIR override只用于build、不用于up，不移动livecheckout；保留旧image标签。排空旧outbox，确认无受保护/未知在线工作与schedule；维护窗口停gateway/AstrBot，保留原持久卷重建paseo。启动AstrBot前核对新容器身份、无OMP子进程且schedule仍为空，执行uid1000的 `deployctl apply --app /deploy/app --commit <sha> --activate restart --timeout 1800 --container alicedev-astrbot --bot-api http://alicedev-astrbot:6200`；激活与健康核验都明确指向生产容器，不使用生产停止时可解析到e2e的同名`astrbot`网络alias。新插件先完成v5cutover再开放Dispatcher/API；健康、迁移及旧paseo历史保留核验后恢复gateway。marker提交前该revision只走此维护路径。不要重启snowluma/e2e/tg-cli或覆盖服务配置。退休/新事实提交后失败保持维护、rollforward，不自动恢复旧协议。临时build产物不写tmpfs，用后删除。
 - `e2e`（`deploy/e2e/`）：独立 compose 项目，常驻；被测的 `bot/` 与 `templates/` 来自独立检出 `/srv/alicedev/e2e-src`，由 agent 经 `e2e_driver.py` 切到指定 SHA 后重启 e2e 的 AstrBot 与 t2i（同时清掉渲染缓存）；AstrBot 配置由 `init` 服务在每次 `up` 时从 `deploy/e2e/seed-data/` 重铺进数据卷（测试场要求每次可复现，是上面 seed-only 的唯一例外）；只在内部网络 `alicedev-e2e` 上（paseo 同在），不发布端口；不持有生产 QQ/TG/paseo 凭据。`tg-cli`（`deploy/tg-cli/`）：独立 compose 项目，`restart: always`，Telegram 会话在命名卷；首次登录一次性人工完成。
 - DNS：`alicedev.237575.xyz` A 记录已手工建；runbook 记录迁入 `pve-vctcn/apps/dns` 的后续 issue。
-- **宿主文件 provision（不变量 4）**：`nekoringo-iac/apps/alicedev`（OpenTofu，state 本地，`github.com/mouriya-devops/nekoringo-iac`）把 `deploy/`（compose、Caddyfile、astrbot 模板 + 渲染产物）与由 SOPS 流式注入的 `deploy/.env` 从一个 committed alicedev revision `git archive` 原子安装到 `/srv/alicedev`（明文不进 state/argv/log）。`bot/`、`templates/` 不在托管集，否则 apply 会回滚已部署的版本。运行时 bring-up（`make up` / `make build && make up` / `deployctl`）是分离的 owner。模块用法见 `nekoringo-iac/apps/alicedev/README.md`。
+- **宿主文件 provision（不变量 4）**：`nekoringo-iac/apps/alicedev`（OpenTofu，state 本地，`github.com/mouriya-devops/nekoringo-iac`）把 `deploy/`（compose、Caddyfile、astrbot 模板 + 渲染产物）与由 OpenBao 经 `bao-exec` 流式取出的 `deploy/.env` 从一个 committed alicedev revision `git archive` 原子安装到 `/srv/alicedev`（明文不进 state/argv/log）。`bot/`、`templates/` 不在托管集，否则 apply 会回滚已部署的版本。运行时 bring-up（`make up` / `make build && make up` / `deployctl`）是分离的 owner。模块用法见 `nekoringo-iac/apps/alicedev/README.md`。
 
 ## 12. 仓库布局
 
